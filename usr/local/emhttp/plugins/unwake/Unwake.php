@@ -247,8 +247,8 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
 <?php endif; ?>
   </dd>
 <?php endforeach; ?>
-  <dt>&nbsp;</dt>
-  <dd><div class="uw-help" id="uw-shares-help">Ticked shares have their folders kept in RAM by Unwake. Untick a share to pass it straight to shfs: Unwake then neither keeps it in RAM nor answers for it, as if Unwake weren't there. Shares whose settings put them on an SSD pool only are decided by Unwake: they can't wake a disk, so they're passed to shfs - unless an array disk still holds folders of them (left over from an older setup, or the Mover moving towards the pool after the pool ran full). Then shfs would check that disk on every listing, and Unwake keeps the share in RAM. Don't forget to click <strong>Apply</strong> below!</div></dd>
+  <dt class="uw-shares-help-row" style="display:none;">&nbsp;</dt>
+  <dd class="uw-shares-help-row" style="display:none;"><div class="uw-help" id="uw-shares-help">Ticked shares have their folders kept in RAM by Unwake. Untick a share to pass it straight to shfs: Unwake then neither keeps it in RAM nor answers for it, as if Unwake weren't there. Shares whose settings put them on an SSD pool only are decided by Unwake: they can't wake a disk, so they're passed to shfs - unless an array disk still holds folders of them (left over from an older setup, or the Mover moving towards the pool after the pool ran full). Then shfs would check that disk on every listing, and Unwake keeps the share in RAM. Don't forget to click <strong>Apply</strong> below!</div></dd>
 
   <dt>&nbsp;</dt>
   <dd><button type="button" id="uw-apply-btn" onclick="uwSave()" disabled>Apply</button></dd>
@@ -500,7 +500,17 @@ var UW_INSTALLED = <?= json_encode($version) ?>;
       if (dd) help = dd.querySelector('.uw-help');
     }
     if (!help) return;
-    help.classList.toggle('open');
+    // A help below a list has a grid row of its own: out of the grid while closed, or its gap shows
+    var rows = dt.dataset.helpTarget ? document.querySelectorAll('.' + dt.dataset.helpTarget + '-row') : [];
+    var show = function (on) { rows.forEach(function (r) { r.style.display = on ? '' : 'none'; }); };
+    if (help.classList.contains('open')) {
+      help.classList.remove('open');
+      if (rows.length) setTimeout(function () { if (!help.classList.contains('open')) show(false); }, 250);
+    } else {
+      show(true);
+      void help.offsetHeight;   // let the row lay out first, so the panel still slides open
+      help.classList.add('open');
+    }
   };
 
   setInterval(poll, 10000);
