@@ -1,0 +1,88 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+.[0-9]+-beta'
+      - '[0-9]+.[0-9]+.[0-9]+.[0-9]+-dev'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    needs: test
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VER: ${{ github.ref_name }}
+      # releases are immutable, so the rolling beta .plg lives on the `channel` branch
+      BETA_URL: https://raw.githubusercontent.com/kaedinger/unwake/channel/unwake.plg
+
+    steps:
+      # build what the tag points to (a -beta tag sits on the beta branch);
+      # full history so the stable run can compare with origin/beta
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compile unwaked
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq meson ninja-build >/dev/null
+          make build-daemon VERSION=$VER
+
+      - name: Build TXZ package
+        run: make package VERSION=$VER
+
+      - name: Update .plg version
+        run: make update-plg VERSION=$VER
+
+      # beta builds look for updates on the beta channel
+      - name: Point the .plg at the beta channel
+        if: ${{ endsWith(github.ref_name, '-beta') }}
+        run: |
+          sed -i "s|<!ENTITY pluginURL .*>|<!ENTITY pluginURL  \"$BETA_URL\">|" unwake.plg
+          grep -E 'ENTITY (version|pluginURL)' unwake.plg
+
+      - name: Create GitHub Release
+        run: |
+          set -euo pipefail
+          case "$VER" in
+            *-beta|*-dev) FLAGS="--prerelease --latest=false" ;;
+            *)            FLAGS="--latest" ;;
+          esac
+          gh release create "$VER" $FLAGS --generate-notes \
+            "pkg/unwake-$VER-x86_64-1.txz" \
+            "unwake.plg"
+
+      - name: Update the beta channel
+        if: ${{ endsWith(github.ref_name, '-beta') }}
+        run: 'bash .github/publish-channel.sh unwake.plg "beta channel $VER"'
+
+      # beta has the same content as this stable release: the beta channel gets it too, same number.
+      # beta has more: leave the beta channel alone, beta users get the fixes with the next beta.
+      - name: Put the stable release on the beta channel
+        if: ${{ !endsWith(github.ref_name, '-beta') && !endsWith(github.ref_name, '-dev') }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse -q --verify origin/beta >/dev/null; then
+            echo "::notice::no beta branch - beta channel unchanged"
+            exit 0
+          fi
+          if [ "$(git rev-parse HEAD^{tree})" != "$(git rev-parse origin/beta^{tree})" ]; then
+            echo "::notice::beta differs from $VER - beta channel unchanged, merge main into beta and release a new beta"
+            exit 0
+          fi
+          mkdir -p beta
+          sed -e "s|<!ENTITY pluginURL .*>|<!ENTITY pluginURL  \"$BETA_URL\">|" \
+              -e "s|^### $VER$|### $VER\n- Beta channel: identical to stable release $VER|" \
+              unwake.plg > beta/unwake.plg
+          grep -E 'ENTITY (version|pluginURL)|Beta channel:' beta/unwake.plg
+          bash .github/publish-channel.sh beta/unwake.plg "beta channel, stable $VER"

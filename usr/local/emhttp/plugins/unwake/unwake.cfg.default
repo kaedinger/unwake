@@ -1,0 +1,26 @@
+# Unwake Configuration
+# Managed by the Unwake plugin settings page
+
+# Put Unwake on top of /mnt/user when the array starts (enabled/disabled)
+SERVICE="disabled"
+
+# Read the directory trees of disks while they spin anyway (yes/no)
+HARVEST="yes"
+
+# File data: "direct" reads a file that lives on exactly one known disk from that
+# disk (skips shfs, one page cache layer less); "shfs" reads everything through shfs
+DATA_PATH="direct"
+
+# Shares that live on an SSD pool only (shareUseCache only/prefer) are passed through
+# to shfs, never cached: they can't wake a disk. These two lists override that:
+# EXCLUDED_SHARES are never cached, INCLUDED_SHARES are cached even if pool-only.
+EXCLUDED_SHARES=""
+INCLUDED_SHARES=""
+
+# After the kernel lets go of many names (the backup's, hours later), hand the freed
+# RAM back to the system instead of keeping it for the next night (yes/no)
+RETURN_RAM="no"
+
+LOG_LEVEL="info"
+LOG_MAX_SIZE_MB="16"
+LOG_TRIM_SIZE_MB="2"

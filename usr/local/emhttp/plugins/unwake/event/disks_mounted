@@ -1,0 +1,5 @@
+#!/bin/bash
+# Array started, shfs is on /mnt/user, Docker and VMs aren't up yet: put unwake on top.
+source /boot/config/plugins/unwake/unwake.cfg 2>/dev/null
+[ "$SERVICE" = "enabled" ] && /etc/rc.d/rc.unwake start >/dev/null 2>&1
+exit 0

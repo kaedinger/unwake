@@ -1,0 +1,5 @@
+#!/bin/bash
+# Fallback for disks_mounted (does nothing if unwake runs already): shares are (re)exported.
+source /boot/config/plugins/unwake/unwake.cfg 2>/dev/null
+[ "$SERVICE" = "enabled" ] && /etc/rc.d/rc.unwake start >/dev/null 2>&1
+exit 0

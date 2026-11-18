@@ -1,0 +1,192 @@
+# Unwake - Directory Caching for Unraid User Shares
+
+Keeps every folder of your user shares in RAM, so browsing them doesn't wake sleeping disks. Not for a while after the last browse, not until a backup pushes the kernel's caches out - for good, kept current as files change. The main goal is fewer disk spin-ups; faster folder listings come for free.
+
+Unwake's brother is [Unspin](https://github.com/kaedinger/unspin), which has the same goal for file data: it moves the most-used files to faster storage, so reading them doesn't wake disks either. Unwake keeps browsing from waking disks, Unspin keeps reading from doing so; they work well together.
+
+<p align="center">
+  <img src="images/header.png" alt="Unwake banner" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/kaedinger/unwake/releases/latest"><img src="https://img.shields.io/github/v/release/kaedinger/unwake?style=flat-square" alt="Latest Release"></a>
+  <a href="https://github.com/kaedinger/unwake/releases"><img src="https://img.shields.io/github/release-date/kaedinger/unwake?style=flat-square" alt="Release Date"></a>
+  <a href="https://unraid.net/"><img src="https://img.shields.io/badge/Unraid-tested%20with%207.3.2-white?logo=unraid&logoColor=white&labelColor=orange" alt="Tested with Unraid 7.3.2"></a>
+  <a href="https://github.com/kaedinger/unwake/issues"><img src="https://img.shields.io/github/issues/kaedinger/unwake?style=flat-square" alt="Open Issues"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Support-Unraid%20Forum-F15A2C?style=flat-square" alt="Support Thread"></a>
+</p>
+
+---
+
+## How It Works
+
+Unraid's user shares (`/mnt/user`) are served by `shfs`, which merges the folders of all array disks and pools into one tree. To list a folder, shfs asks every disk that may hold a part of it. If that disk's folder isn't in the kernel's caches any more, the disk spins up - for a folder listing, a file name that doesn't exist (Windows asks for `desktop.ini` and `Thumbs.db` everywhere), or the File Manager asking where a share lives. Dynamix Cache Directories fights this by re-reading every folder over and over, so the kernel keeps them; a backup or a big copy still pushes them out, and the re-reading itself keeps disks busy.
+
+Unwake runs `unwaked`, a FUSE daemon that sits **on top of** `/mnt/user` - shfs stays mounted underneath - and answers from its own tree in RAM:
+
+| Request | Answered from |
+|---|---|
+| Folder listing (`ls`, SMB, NFS, File Manager) | RAM |
+| Name lookup, including names that don't exist | RAM |
+| File attributes (size, times, owner, mode) | RAM |
+| Extended attributes (Samba's `user.DOSATTRIB`, ...) and `system.LOCATION(S)` | RAM |
+| Reading and writing file data | the disk, as before (see *File data* below) |
+| Creating, renaming, deleting | shfs, as before |
+
+**Filling the tree.** Unwake reads a disk's folders only while that disk spins anyway, at idle I/O priority, and never wakes a disk to do so. A disk that sleeps when Unwake starts is read the next time something else spins it up. Until then, its folders are passed to shfs, as without Unwake.
+
+**Keeping it current.** Unwake watches every disk and pool with **fanotify**, one mark per file system. Every change - through Unwake, straight on `/mnt/diskN`, by the Mover, Unbalanced, a container or Unspin - updates the tree right away. Nothing is re-read on a timer; once a disk has been read, it isn't read for its folders again.
+
+**What stays with shfs.** Shares that live on an SSD pool only can't wake a disk; they're passed to shfs untouched (unless an array disk still holds folders of them, then they're kept in RAM). You can untick any share to pass it to shfs.
+
+### File data and kernel passthrough
+
+Unwake isn't in the way of file data: with Linux 6.9+ (Unraid 7.3.2 has 6.18), it hands every opened file to the kernel (**FUSE passthrough**), which then reads and writes it directly - no copy through the daemon, no extra page cache. A file that lives on exactly one known disk is opened on that disk, skipping shfs (*File data: direct*).
+
+The kernel takes **one backing file per file**, shared by everything that has the file open. Unwake therefore opens that backing file **for reading and writing**, even when the first program only reads it - otherwise a program that wants to write the file while another one reads it (qBittorrent finishing a download that Plex is scanning, Word saving a document that Explorer's preview holds open) would be refused. What that means:
+
+- While a file is open through `/mnt/user`, Unwake holds it open for writing. That changes nothing on the disk, but a program that tries to *execute* that same file via `/mnt/diskN` or `/mnt/cache` at that moment gets "text file busy".
+- Tools that count file opens on the disks (Unspin) see one extra open when a file is first opened.
+- Where a read-write open isn't possible (read-only file system, a file being executed), the backing is read-only; a program opening that file for writing while it's open elsewhere gets "device or resource busy".
+
+### Updates without restarting anything
+
+A plugin update switches Unwake in place: the running version hands its FUSE connection, its tree, and every open file and folder to the new one. The mount on `/mnt/user` stays the same, so containers, VMs, SMB clients and shells carry on without a restart; they see a pause of about a second. If the new version can't take over, the old one simply keeps running.
+
+---
+
+## Features
+
+- **Folders in RAM, for good** - listings, lookups (including of names that don't exist), attributes and extended attributes answered without touching shfs; nothing pushes them out of memory
+- **Never wakes a disk to read it** - folders are read while a disk spins anyway, at idle I/O priority
+- **Event-driven** - fanotify on every disk and pool keeps the tree current, whoever changes a file; no polling, no re-scans
+- **All Unraid file systems** - XFS, btrfs, ZFS (datasets are followed as they come and go), on array disks and pools
+- **Stacked, not replacing** - shfs stays mounted underneath; stopping Unwake takes it off at once, and what still uses it keeps working until it lets go
+- **Kernel passthrough for file data** - no copy through the daemon; files on one known disk are read from that disk directly
+- **In-place updates** - same mount, same open files; containers and VMs don't notice
+- **Shares in RAM** - every share listed with a tick box; SSD-pool-only shares are detected and passed to shfs unless an array disk still holds parts of them
+- **Spin-up diagnostics** - when a disk spins up, the log lists what Unwake passed to shfs that could have reached that disk
+- **Safe by design** - if `unwaked` dies, the supervisor takes its mount away at once, so `/mnt/user` is plain shfs again, and restarts it; on array stop, Unwake gets out of the way within 10 seconds
+- **Diagnostics in one file** - `rc.unwake diag`, and `rc.unwake users` names whatever still uses an older instance
+- **Live log viewer** - repeated entries folded
+
+---
+
+## Installation
+
+### Via Community Applications (recommended)
+
+1. Install the **Community Applications** plugin
+2. Search for **Unwake**
+3. Click Install
+
+### Manual
+
+```bash
+plugin install https://github.com/kaedinger/unwake/releases/latest/download/unwake.plg
+```
+
+Settings under *Settings → Utilities → Unwake*. Betas: switch channels at the bottom right of the settings page.
+
+Unwake replaces Dynamix Cache Directories - turn that off under *Settings → Folder Caching*. If it left `vfs_cache_pressure` at a low value, the settings page offers to set it back to 100.
+
+---
+
+## Project Structure
+
+```
+unwake/
+├── unwake.plg                          # Plugin manifest (install/remove)
+├── src/                                # C++ FUSE daemon (compiled by CI)
+│   ├── main.cpp                        # Supervisor, worker lifecycle, status file
+│   ├── fs.cpp                          # FUSE operations, open files, passthrough
+│   ├── tree.cpp                        # The union directory tree
+│   ├── branches.cpp                    # Disks and pools, spin state, harvester, share exclusions
+│   ├── events.cpp                      # fanotify: changes on every disk and pool
+│   ├── loop.cpp                        # FUSE request loop that can pause
+│   └── handover.{h,cpp}                # In-place updates
+├── patches/                            # libfuse patch for in-place updates
+├── ca/forum-post.md                    # Unraid forum support thread
+├── tests/integration.sh                # CI: loop XFS disks + mergerfs as the shfs stand-in
+├── etc/rc.d/rc.unwake                  # Service script
+└── usr/local/emhttp/plugins/unwake/
+    ├── Unwake.page                     # Unraid page registration
+    ├── Unwake.php                      # Settings UI
+    ├── include/                        # cfg.php (helpers), exec.php (actions), channel.php (beta channel)
+    ├── event/                          # Array start/stop hooks
+    └── unwake.cfg.default              # Default config
+```
+
+CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XFS disks, with mergerfs standing in for shfs.
+
+---
+
+## Configuration Reference
+
+| Key | Default | Description |
+|---|---|---|
+| `SERVICE` | `disabled` | `enabled` puts Unwake on top of `/mnt/user` when the array starts |
+| `HARVEST` | `yes` | Read the folders of disks while they spin anyway. `no`: only folders listed through Unwake are kept |
+| `DATA_PATH` | `direct` | `direct`: a file on exactly one known disk is opened on that disk; `shfs`: all files through shfs |
+| `RETURN_RAM` | `no` | `yes`: once the kernel has let go of many names (a backup's, hours later), hand the freed RAM back to the system |
+| `EXCLUDED_SHARES` | *(empty)* | Shares passed to shfs, never kept in RAM. Managed by *Shares in RAM* on the settings page |
+| `INCLUDED_SHARES` | *(empty)* | SSD-pool-only shares kept in RAM anyway |
+| `LOG_LEVEL` | `info` | `info` or `debug` |
+| `LOG_MAX_SIZE_MB` | `16` | The log is cut once it grows past this |
+| `LOG_TRIM_SIZE_MB` | `2` | How much of the newest log is kept when it's cut |
+
+---
+
+## Service Control
+
+```bash
+/etc/rc.d/rc.unwake start
+/etc/rc.d/rc.unwake stop              # take it off /mnt/user; what still uses it keeps working until it lets go
+/etc/rc.d/rc.unwake stop --array      # same, but cut off after 10 s (array stop)
+/etc/rc.d/rc.unwake restart           # switch in place when possible, else stop and start
+/etc/rc.d/rc.unwake restart --fresh   # always stop and start
+/etc/rc.d/rc.unwake upgrade           # switch to the installed binary in place (the plugin does this after an update)
+/etc/rc.d/rc.unwake status
+/etc/rc.d/rc.unwake reload            # re-read the settings
+/etc/rc.d/rc.unwake users             # who still uses an older, detached instance
+/etc/rc.d/rc.unwake diag              # everything for a problem report, in one file under /tmp
+```
+
+---
+
+## Daemon CLI
+
+```bash
+# Normal run (reads /boot/config/plugins/unwake/unwake.cfg, mounts on /mnt/user)
+/usr/local/sbin/unwaked
+
+/usr/local/sbin/unwaked --version
+/usr/local/sbin/unwaked --config /path/to/unwake.cfg --log /path/to/unwake.log
+/usr/local/sbin/unwaked --no-supervisor          # the worker only, without the watchdog
+/usr/local/sbin/unwaked --bench-handover 1400000 # time an in-place update with a tree of that many names
+```
+
+---
+
+## Requirements
+
+- Unraid 7.3.2 or newer
+- RAM: about 270 bytes per file and folder name for the tree, plus about 200 bytes for each name the kernel currently holds an inode for. A backup or media scan through `/mnt/user` makes that most of them, and the kernel lets go only when it needs the memory. So, between about 270 and 460 bytes per name: 1.4 million names take 380 to 650 MB (measured: 376 MB before the nightly backup, 644 MB after). *Return Freed RAM* gives the second part back once the kernel lets go
+- Linux 6.9+ for kernel passthrough (without it, file data goes through the daemon)
+- No external dependencies
+
+---
+
+## Building
+
+`make build-daemon package` (needs meson and ninja for libfuse, which is patched and linked statically). Releases are built by CI from tags `YYYY.MM.DD.SECS` (stable, on `main`) and `YYYY.MM.DD.SECS-beta` (on `beta`), as in Unspin.
+
+---
+
+## License
+
+GPLv2. Contributions welcome - open an issue or PR on GitHub.
+
+## History
+
+Unwake came out of [Unspin](https://github.com/kaedinger/unspin)'s disk wake-up tracking: once it showed *who* woke the disks, most of the wake-ups turned out to be folder listings and name lookups that Dynamix Cache Directories couldn't keep in memory. Unwake was designed and written with Claude (Anthropic) in Claude Code, and tested on the author's own server.

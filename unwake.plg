@@ -1,0 +1,137 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+  <!ENTITY name       "unwake">
+  <!ENTITY author     "kaedinger">
+  <!ENTITY version   "2026.11.18.42594-beta">
+  <!ENTITY launch     "Utilities/Unwake">
+  <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
+  <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
+]>
+
+<PLUGIN
+  name="&name;"
+  author="&author;"
+  version="&version;"
+  launch="&launch;"
+  pluginURL="&pluginURL;"
+  icon="moon-o"
+  min="7.3.2"
+  description="Keeps the directory trees of your user shares in RAM, so folder listings, name lookups and attribute reads don't wake sleeping disks - not even after a backup or a big copy pushed everything else out of memory. Replaces Dynamix Cache Directories. Configurable under Utilities."
+>
+
+<CHANGES>
+### next
+- Initial release: Unwake sits on top of /mnt/user and answers folder listings, name lookups, attributes and extended attributes from RAM, so they don't wake sleeping disks
+- folders of a disk are read while it spins anyway, at idle priority, never waking it
+- every change on disks and pools is followed via fanotify: Mover, direct writes to /mnt/diskN, containers, ZFS datasets
+- file data goes through the kernel (FUSE passthrough); files on one known disk are read from that disk directly
+- shares that live on an SSD pool only are passed to shfs; any share can be passed to shfs on the settings page
+- updates switch in place: containers, VMs and open files carry on
+- when a disk spins up, the log lists what Unwake passed to shfs that could have reached it
+- stop takes Unwake off at once; if unwaked dies, its mount is taken off and it is restarted
+- `rc.unwake diag` collects everything for a problem report
+</CHANGES>
+
+<!--
+  ============================================================
+  Install/upgrade the plugin package (TXZ archive)
+  ============================================================
+-->
+<FILE Name="/boot/config/plugins/&name;/&name;.txz">
+<URL>https://github.com/kaedinger/unwake/releases/download/&version;/&name;-&version;-x86_64-1.txz</URL>
+<SHA256>0000000000000000000000000000000000000000000000000000000000000000</SHA256>
+</FILE>
+
+<FILE Run="/bin/bash">
+<INLINE>
+echo "                                ##                     "
+echo "                          ##########                   "
+echo "                       ###########                     "
+echo "                     ###### #####                      "
+echo "                   ######   ####                       "
+echo "                  #####    ####                        "
+echo "                 #####     ####                        "
+echo "                ####       ####                        "
+echo "                ####       ####                        "
+echo "                ####        ####                       "
+echo "                ####        #####                      "
+echo "                ####         #####                     "
+echo "                ####          ######                   "
+echo "                ####            #######          ##    "
+echo "                 ####             ##################   "
+echo "                  #####              ##############    "
+echo "                   #####                    ######     "
+echo "                    #######               ######       "
+echo "                      #########       ########         "
+echo "                         ###################           "
+echo "                               #######                 "
+echo "                                                       "
+echo "              #########################################"
+VER="&version;"
+LEFT="  U N W A K E  "
+RIGHT="v${VER}  "
+PAD=$(( 39 - ${#LEFT} - ${#RIGHT} ))
+printf "              #%s%${PAD}s%s#\n" "$LEFT" "" "$RIGHT"
+echo "              #########################################"
+echo ""
+
+# A running unwaked keeps running: the binary can be replaced under it. After the
+# install, it hands over to the new version in place (post-install below).
+removepkg &name; 2>/dev/null
+installpkg /boot/config/plugins/&name;/&name;.txz
+</INLINE>
+</FILE>
+
+<!--
+  =====================================================
+  Post-install: config defaults, start if enabled
+  =====================================================
+-->
+<FILE Run="/bin/bash">
+<INLINE>
+mkdir -p /boot/config/plugins/unwake /var/run/unwake
+CFG=/boot/config/plugins/unwake/unwake.cfg
+[ -f "$CFG" ] || cp /usr/local/emhttp/plugins/unwake/unwake.cfg.default "$CFG"
+touch /var/log/unwake.log
+chmod +x /usr/local/sbin/unwaked /etc/rc.d/rc.unwake /usr/local/emhttp/plugins/unwake/event/* 2>/dev/null
+
+source "$CFG"
+if /etc/rc.d/rc.unwake status >/dev/null 2>/dev/null; then
+  # same mount, same open files: containers, VMs and SMB clients carry on
+  OUT=$(/etc/rc.d/rc.unwake upgrade); RC=$?
+  if [ $RC -eq 0 ]; then echo "Unwake: $OUT"
+  elif [ $RC -eq 2 ]; then
+    echo "Unwake: the running version can't switch to this one in place (it's older than in-place upgrades)."
+    echo "Unwake: restart Unwake on its settings page, or restart the array. Containers and VMs started before keep the old one until they restart - this is the last time."
+  else
+    echo "Unwake: $OUT"
+    echo "Unwake: the running version keeps running - try again on the settings page, or restart Unwake."
+  fi
+elif [ "$SERVICE" = "enabled" ]; then
+  /etc/rc.d/rc.unwake start
+fi
+
+if pgrep -f '[c]ache_dirs' >/dev/null 2>/dev/null; then
+  echo "Unwake: Dynamix Cache Directories is running. Unwake replaces it - turn it off under Settings > Folder Caching."
+fi
+echo "Unwake plugin installed successfully."
+</INLINE>
+</FILE>
+
+<!--
+  ===============================================
+  Removal: take Unwake off, keep user config on flash
+  ===============================================
+-->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+# Detach: new access goes to shfs at once. A detached unwaked keeps serving
+# files that are still open and exits when they close, or when the array stops.
+/etc/rc.d/rc.unwake stop 2>/dev/null
+removepkg &name;
+rm -rf /tmp/unwake-channel /tmp/plugins/unwake-stable.txt /tmp/plugins/unwake-beta.txt
+echo "Unwake plugin removed. Config preserved at /boot/config/plugins/unwake/"
+</INLINE>
+</FILE>
+
+</PLUGIN>

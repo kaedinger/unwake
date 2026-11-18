@@ -1,0 +1,263 @@
+#!/bin/bash
+# rc.unwake - Unwake service controller
+# Usage: /etc/rc.d/rc.unwake {start|stop|stop --array|restart [--fresh]|upgrade|status|reload|users|diag}
+#
+# unwaked mounts itself on top of /mnt/user (shfs stays mounted underneath).
+# stop detaches it: new access goes to shfs at once, and the old unwaked keeps
+# serving what still uses it (open files, a VM, containers started while it ran)
+# until the last user is gone. stop --array (array stop) cuts those off after
+# 10 seconds, so Unraid can unmount shfs.
+
+DAEMON=${UNWAKE_DAEMON:-/usr/local/sbin/unwaked}
+RUN=${UNWAKE_RUN:-/var/run/unwake}
+PID_FILE=$RUN/unwaked.pid
+LOG_FILE=${UNWAKE_LOG:-/var/log/unwake.log}
+MNT=${UNWAKE_MNT:-/mnt/user}
+
+mkdir -p "$RUN"
+
+log_info() { echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO ] $1" >> "$LOG_FILE"; }
+
+alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
+sup_pid() { cat "$PID_FILE" 2>/dev/null; }
+draining_pids() { local f; for f in "$RUN"/draining.*; do [ -f "$f" ] && cat "$f"; done; }
+top_fstype() { awk -v m="$MNT" '$5 == m {t=$0} END {split(t, a, " - "); split(a[2], b, " "); print b[1]}' /proc/self/mountinfo; }
+state() { grep -o '"state":"[a-z]*"' "$RUN/status.json" 2>/dev/null | cut -d'"' -f4; }
+
+# forget draining unwakeds that are gone
+tidy() {
+    local f
+    for f in "$RUN"/draining.*; do [ -f "$f" ] && ! alive "$(cat "$f")" && rm -f "$f"; done
+    alive "$(sup_pid)" || rm -f "$PID_FILE"
+}
+
+unwake_start() {
+    tidy
+    if alive "$(sup_pid)"; then
+        echo "unwaked is already running (PID $(sup_pid))."
+        return 0
+    fi
+    case "$(top_fstype)" in
+        fuse.shfs) ;;
+        fuse.unwake) echo "Another Unwake is mounted on $MNT - not stacking a second one."; return 1 ;;
+        "") echo "$MNT is not mounted (array stopped?) - not starting."; return 1 ;;
+        *) echo "$MNT is $(top_fstype), not shfs - not starting."; return 1 ;;
+    esac
+    if [ ! -x "$DAEMON" ]; then
+        echo "Error: $DAEMON not found or not executable."
+        return 1
+    fi
+    rm -f "$RUN/ready"
+    setsid "$DAEMON" > /dev/null 2>&1 < /dev/null &
+    local pid=$!
+    echo "$pid" > "$PID_FILE"
+    local i
+    for i in $(seq 1 60); do
+        [ -f "$RUN/ready" ] && { echo "unwaked started (PID $pid)."; return 0; }
+        alive "$pid" || break
+        sleep 0.25
+    done
+    rm -f "$PID_FILE"
+    echo "unwaked did not start - see $LOG_FILE."
+    tail -3 "$LOG_FILE" 2>/dev/null
+    return 1
+}
+
+unwake_stop() {
+    tidy
+    local array=0 pid sig=TERM
+    [ "$1" = "--array" ] && { array=1; sig=USR1; }
+    pid=$(sup_pid)
+    if ! alive "$pid" && [ -z "$(draining_pids)" ]; then
+        echo "unwaked is not running."
+        return 0
+    fi
+    if alive "$pid"; then
+        echo "Stopping unwaked (PID $pid)..."
+        kill -$sig "$pid"
+        local i
+        for i in $(seq 1 40); do [ "$(top_fstype)" = fuse.unwake ] || break; sleep 0.25; done
+        mv "$PID_FILE" "$RUN/draining.$pid"
+    fi
+    if [ "$array" -eq 1 ]; then
+        # the array goes down: everything must be gone, within ~15 s
+        for pid in $(draining_pids); do kill -USR1 "$pid" 2>/dev/null; done
+        local i
+        for i in $(seq 1 60); do
+            local left=0
+            for pid in $(draining_pids); do alive "$pid" && left=1; done
+            [ $left -eq 0 ] && break
+            sleep 0.25
+        done
+        for pid in $(draining_pids); do
+            if alive "$pid"; then
+                log_info "unwaked $pid did not stop in time - killing it"
+                pkill -9 -P "$pid" 2>/dev/null; kill -9 "$pid" 2>/dev/null
+            fi
+        done
+        tidy
+        echo "unwaked stopped."
+        return 0
+    fi
+    tidy
+    if [ -n "$(draining_pids)" ]; then
+        echo "unwaked detached. It keeps serving files that are still open until they're closed."
+    else
+        echo "unwaked stopped."
+    fi
+}
+
+unwake_status() {
+    tidy
+    if alive "$(sup_pid)"; then
+        echo "unwaked is running (PID $(sup_pid)), $(state)."
+        local n
+        n=$(draining_pids | wc -w)
+        [ "$n" -gt 0 ] && echo "$n detached unwaked still serving open files."
+        return 0
+    fi
+    if [ -n "$(draining_pids)" ]; then
+        echo "unwaked is not running; a detached one still serves open files (PID $(draining_pids | tr '\n' ' '))."
+        return 1
+    fi
+    echo "unwaked is not running."
+    return 1
+}
+
+# Restart = switch to the installed binary in place when the running one can (same
+# mount: containers, VMs and open files carry on); otherwise, or with --fresh, stop
+# and start (a new mount; what used the old one stays on it until it lets go).
+unwake_restart() {
+    local out rc
+    if [ "$1" != "--fresh" ] && alive "$(sup_pid)" && grep -q '"handover":' "$RUN/status.json" 2>/dev/null; then
+        out=$(unwake_upgrade); rc=$?
+        echo "$out"
+        [ $rc -eq 0 ] && return 0
+        echo "Restarting instead."
+    fi
+    unwake_stop; sleep 1; unwake_start
+}
+
+# In-place upgrade after the plugin installed a new unwaked: the running one hands
+# its connection and state to the new binary. Containers, VMs and open files stay
+# on the same mount and are served by the new version from then on.
+unwake_upgrade() {
+    tidy
+    local sup old new mark i
+    sup=$(sup_pid)
+    alive "$sup" || { echo "unwaked is not running."; return 1; }
+    if ! grep -q '"handover":' "$RUN/status.json" 2>/dev/null; then
+        echo "The running Unwake can't switch in place - restart it to use the new version."
+        return 2
+    fi
+    old=$(cat "$RUN/ready" 2>/dev/null)
+    mark=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+    kill -USR2 "$sup"
+    for i in $(seq 1 240); do
+        sleep 0.5
+        new=$(cat "$RUN/ready" 2>/dev/null)
+        if [ -n "$new" ] && [ "$new" != "$old" ] && alive "$new"; then
+            echo "Switched to $("$DAEMON" --version) in place (pid $new)."
+            return 0
+        fi
+        if tail -n +"$((mark + 1))" "$LOG_FILE" 2>/dev/null | grep -q "Upgrade: .*\(serves on\|without taking over\|is missing\|didn't take\)"; then
+            echo "Not switched: $(tail -n +"$((mark + 1))" "$LOG_FILE" | grep 'Upgrade:' | grep -v 'started\|taking over$' | tail -1 | cut -d' ' -f4-)"
+            return 1
+        fi
+    done
+    echo "No answer from Unwake within 2 minutes - see $LOG_FILE"
+    return 1
+}
+
+# Who still uses a detached unwaked: processes with a file, folder or root on it, and
+# containers or VMs with a bind mount of it in their own mount namespace. The live one
+# (on top of /mnt/user) is left out.
+unwake_users() {
+    local f id dev wpid live="" mm p x found=0 any=0
+    [ "$(top_fstype)" = fuse.unwake ] && live=$(stat -c %d "$MNT" 2>/dev/null)
+    for f in "$RUN"/mount.*; do
+        [ -f "$f" ] || continue
+        read -r id dev < "$f"
+        wpid=${f##*.}
+        [ -n "$dev" ] && [ "$dev" != 0 ] && alive "$wpid" || continue
+        [ "$dev" = "$live" ] && continue
+        any=1
+        mm="$(( ((dev >> 8) & 0xfff) | ((dev >> 32) & ~0xfff) )):$(( (dev & 0xff) | ((dev >> 12) & ~0xff) ))"
+        echo "Detached Unwake (pid $wpid, started $(date -r "$f" '+%F %T'), device $mm):"
+        found=0
+        for p in /proc/[0-9]*; do
+            for x in "$p/cwd" "$p/root" "$p"/fd/*; do
+                [ "$(stat -L -c %d "$x" 2>/dev/null)" = "$dev" ] || continue
+                echo "  pid ${p#/proc/} $(cat "$p/comm" 2>/dev/null): $(readlink "$x" 2>/dev/null)"
+                found=1
+                break
+            done
+        done
+        # a container keeps the bind mounts it got at its start; one process per namespace is enough
+        local seen=" "
+        for p in /proc/[0-9]*; do
+            local ns; ns=$(readlink "$p/ns/mnt" 2>/dev/null) || continue
+            [ "$ns" = "$(readlink /proc/self/ns/mnt)" ] && continue
+            case "$seen" in *" $ns "*) continue ;; esac
+            awk -v mm="$mm" '$3 == mm && / - fuse\.unwake / {f=1} END {exit !f}' "$p/mountinfo" 2>/dev/null || continue
+            seen="$seen$ns "
+            local cname="" cp cn
+            while read -r cp cn; do
+                [ "$(readlink "/proc/$cp/ns/mnt" 2>/dev/null)" = "$ns" ] && cname=${cn#/} && break
+            done <<< "$(docker ps -q 2>/dev/null | xargs -r docker inspect -f '{{.State.Pid}} {{.Name}}' 2>/dev/null)"
+            echo "  pid ${p#/proc/} $(cat "$p/comm" 2>/dev/null): has it mounted in its own namespace${cname:+ (container $cname)}"
+            found=1
+        done
+        [ $found -eq 0 ] && echo "  nothing found - it should exit on its own shortly"
+    done
+    [ $any -eq 0 ] && echo "No detached Unwake is running."
+    return 0
+}
+
+# Everything needed to look into a problem, in one file (no file contents, no secrets).
+unwake_diag() {
+    local out=/tmp/unwake-diag-$(date +%Y%m%d-%H%M%S).txt
+    {
+        echo "== Unwake diagnostics $(date '+%F %T')"
+        echo "-- versions"
+        echo "unwaked: $("$DAEMON" --version 2>&1)"
+        echo "plugin: $(grep -o '<!ENTITY version *"[^"]*"' /boot/config/plugins/unwake.plg 2>/dev/null)"
+        echo "unraid: $(cat /etc/unraid-version 2>/dev/null)  kernel: $(uname -r)"
+        echo "-- status"
+        unwake_status
+        echo "processes:"; pgrep -a unwaked
+        cat "$RUN/status.json" 2>/dev/null
+        echo "-- what still uses a detached unwake"
+        unwake_users
+        echo "-- settings"
+        cat /boot/config/plugins/unwake/unwake.cfg 2>/dev/null | grep -v '^#'
+        echo "-- mounts at and below /mnt"
+        grep -E ' /mnt/' /proc/self/mountinfo | awk '{s=$0; sub(/.* - /, "", s); print $5, s}'
+        echo "fuse connections: $(ls /sys/fs/fuse/connections 2>/dev/null | tr '\n' ' ')"
+        echo "-- array"
+        grep -E '^(fsState|mdState)=' /var/local/emhttp/var.ini 2>/dev/null
+        awk -F= '/^\[/{n=$0} /^(name|device|type|rotational|spundown|fsMountpoint)=/{printf "%s %s ", $1, $2} /^\[/{print ""}' /var/local/emhttp/disks.ini 2>/dev/null | grep -E 'type="(Data|Cache|Parity)"'
+        echo
+        echo "-- shares (use of pools)"
+        for f in /boot/config/shares/*.cfg; do [ -f "$f" ] && echo "$(basename "$f" .cfg): $(grep -hE '^(shareUseCache|shareCachePool)=' "$f" | tr '\n' ' ')"; done
+        echo "-- system"
+        echo "vfs_cache_pressure=$(cat /proc/sys/vm/vfs_cache_pressure)  cache_dirs running: $(pgrep -f '[c]ache_dirs' >/dev/null && echo yes || echo no)"
+        free -m
+        grep -E '^(xfs_buf|xfs_inode|dentry|fuse_inode) ' /proc/slabinfo 2>/dev/null | awk '{print $1, $2}'
+        echo "-- log (last 400 lines)"
+        tail -n 400 "$LOG_FILE" 2>/dev/null
+    } > "$out" 2>&1
+    echo "Saved to $out"
+}
+
+case "$1" in
+    diag)    unwake_diag ;;
+    users)   unwake_users ;;
+    upgrade) unwake_upgrade ;;
+    start)   unwake_start ;;
+    stop)    unwake_stop "$2" ;;
+    restart) unwake_restart "$2" ;;
+    status)  unwake_status ;;
+    reload)  alive "$(sup_pid)" && kill -HUP "$(sup_pid)" && echo "Settings reloaded." ;;
+    *)       echo "Usage: $0 {start|stop [--array]|restart [--fresh]|upgrade|status|reload|users|diag}"; exit 1 ;;
+esac

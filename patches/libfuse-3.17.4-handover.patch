@@ -1,0 +1,77 @@
+--- a/include/fuse_lowlevel.h
++++ b/include/fuse_lowlevel.h
+@@ -2291,6 +2291,24 @@
+  */
+ int fuse_session_fd(struct fuse_session *se);
+ 
++/*
++ * Unwake: hand a running session over to another process (in-place upgrade).
++ * export copies what INIT negotiated; import gives a fresh, unmounted session
++ * that state and the /dev/fuse fd of the running connection, so it serves
++ * requests right away without waiting for an INIT that never comes again.
++ */
++struct fuse_session_handover {
++	uint32_t magic;		/* FUSE_HANDOVER_MAGIC */
++	uint32_t size;		/* sizeof(struct fuse_session_handover) */
++	struct fuse_conn_info conn;
++	uint64_t bufsize;
++};
++#define FUSE_HANDOVER_MAGIC 0x55574f48	/* "HOWU" */
++int fuse_session_handover_export(struct fuse_session *se,
++				 struct fuse_session_handover *h);
++int fuse_session_handover_import(struct fuse_session *se, int fd,
++				 const struct fuse_session_handover *h);
++
+ /**
+  * Process a raw request supplied in a generic buffer
+  *
+--- a/lib/fuse_lowlevel.c
++++ b/lib/fuse_lowlevel.c
+@@ -3536,6 +3536,32 @@
+ 	return se->fd;
+ }
+ 
++int fuse_session_handover_export(struct fuse_session *se,
++				 struct fuse_session_handover *h)
++{
++	if (!se->got_init)
++		return -EINVAL;
++	memset(h, 0, sizeof(*h));
++	h->magic = FUSE_HANDOVER_MAGIC;
++	h->size = sizeof(*h);
++	h->conn = se->conn;
++	h->bufsize = se->bufsize;
++	return 0;
++}
++
++int fuse_session_handover_import(struct fuse_session *se, int fd,
++				 const struct fuse_session_handover *h)
++{
++	if (h->magic != FUSE_HANDOVER_MAGIC || h->size != sizeof(*h) ||
++	    se->fd != -1 || se->got_init || fd < 0)
++		return -EINVAL;
++	se->fd = fd;
++	se->conn = h->conn;
++	se->bufsize = h->bufsize;
++	se->got_init = 1;
++	return 0;
++}
++
+ void fuse_session_unmount(struct fuse_session *se)
+ {
+ 	if (se->mountpoint != NULL) {
+--- a/lib/fuse_versionscript
++++ b/lib/fuse_versionscript
+@@ -212,6 +212,12 @@
+ 		fuse_convert_to_conn_want_ext;
+ } FUSE_3.17;
+ 
++UNWAKE_HANDOVER {
++	global:
++		fuse_session_handover_export;
++		fuse_session_handover_import;
++} FUSE_3.17.3;
++
+ # Local Variables:
+ # indent-tabs-mode: t
+ # End:

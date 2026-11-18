@@ -1,0 +1,269 @@
+<?php
+/* Unwake - shared helpers
+ * Required by both Unwake.php (page render) and exec.php (POST handler).
+ */
+
+const UNWAKE_CFG      = '/boot/config/plugins/unwake/unwake.cfg';
+const UNWAKE_DEFAULTS = '/usr/local/emhttp/plugins/unwake/unwake.cfg.default';
+const UNWAKE_LOG      = '/var/log/unwake.log';
+const UNWAKE_RUN      = '/var/run/unwake';
+const UNWAKE_RC       = '/etc/rc.d/rc.unwake';
+
+function load_cfg($path) {
+    $cfg = [];
+    if (!file_exists($path)) return $cfg;
+    foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#') continue;
+        if (strpos($line, '=') !== false) {
+            [$k, $v] = explode('=', $line, 2);
+            $cfg[trim($k)] = trim($v, " \t\"'");
+        }
+    }
+    return $cfg;
+}
+
+// The settings in effect: the saved ones over the defaults
+function settings() {
+    return [...load_cfg(UNWAKE_DEFAULTS), ...load_cfg(UNWAKE_CFG)];
+}
+
+function is_debug($cfg) { return ($cfg['LOG_LEVEL'] ?? '') === 'debug'; }
+
+function pid_alive($pid) { return $pid > 0 && file_exists("/proc/$pid"); }
+
+// The daemon's own report, or null when it isn't running
+function daemon_status() {
+    $pid = (int)@file_get_contents(UNWAKE_RUN . '/unwaked.pid');
+    $st  = @json_decode(@file_get_contents(UNWAKE_RUN . '/status.json'), true);
+    $older = [];   // detached instances still serving something: when each was stopped
+    foreach (glob(UNWAKE_RUN . '/draining.*') ?: [] as $f)
+        if (pid_alive((int)@file_get_contents($f))) $older[] = (int)@filemtime($f);
+    sort($older);
+    $draining = count($older);
+    if (!pid_alive($pid)) return ['running' => false, 'draining' => $draining, 'older' => $older];
+    $st = is_array($st) ? $st : [];
+    $st['running']  = true;
+    $st['draining'] = $draining;
+    $st['older']    = $older;
+    return $st;
+}
+
+// What is mounted on /mnt/user right now (the topmost mount)
+function user_mount_type() {
+    $t = '';
+    foreach (@file('/proc/self/mountinfo') ?: [] as $line) {
+        $f = explode(' ', $line);
+        if (($f[4] ?? '') !== '/mnt/user') continue;
+        $sep = array_search('-', $f);
+        if ($sep !== false) $t = $f[$sep + 1] ?? '';
+    }
+    return $t;
+}
+
+// Dynamix Cache Directories keeps scanning: Unwake makes it unnecessary
+// Dynamix Cache Directories' daemon. Its plugin also runs cache_dirs briefly (status,
+// stop, plugin checks after an install): only a process older than 15 s counts.
+function cache_dirs_running() {
+    exec("pgrep -f '[c]ache_dirs' 2>/dev/null", $pids);   // [c]: not this shell itself
+    foreach ($pids as $pid) {
+        $age = (int)trim((string)@shell_exec('ps -o etimes= -p ' . (int)$pid . ' 2>/dev/null'));
+        if ($age > 15) return true;
+    }
+    return false;
+}
+
+// vm.vfs_cache_pressure, or null if it can't be read
+const VFS_PRESSURE = '/proc/sys/vm/vfs_cache_pressure';
+function vfs_pressure() {
+    $v = @file_get_contents(VFS_PRESSURE);
+    return ($v === false || !is_numeric(trim($v))) ? null : (int)trim($v);
+}
+
+// installed version, from the .plg on the flash
+function installed_version() {
+    $plg = @file_get_contents('/boot/config/plugins/unwake.plg');
+    return ($plg && preg_match('/<!ENTITY\s+version\s+"([^"]+)"/', $plg, $m)) ? $m[1] : 'unknown';
+}
+
+// Pools without spinning disks: name => true (from disks.ini)
+function ssd_pools() {
+    $rot = [];
+    foreach (@parse_ini_file('/var/local/emhttp/disks.ini', true) ?: [] as $d) {
+        if (($d['type'] ?? '') !== 'Cache' || !isset($d['name'])) continue;
+        $pool = rtrim($d['name'], '0123456789');
+        $rot[$pool] = ($rot[$pool] ?? false) || ($d['rotational'] ?? '1') !== '0';
+    }
+    return array_map(fn($r) => !$r, $rot);
+}
+
+// user shares from Unraid's share configs: name => [comment, pool_only]
+// pool_only: its files live on an SSD pool only (primary storage a pool, nothing or
+// the Mover towards the pool behind it) - it can't wake a disk, so Unwake leaves it
+// to shfs unless told otherwise. Same rule as the daemon's apply_exclusions().
+function load_unraid_shares() {
+    $out = [];
+    $ssd = ssd_pools();
+    $mounted = user_mount_type() !== '';
+    foreach (glob('/boot/config/shares/*.cfg') ?: [] as $f) {
+        $name = basename($f, '.cfg');
+        if ($mounted && !is_dir("/mnt/user/$name")) continue;   // deleted share
+        $c = load_cfg($f);
+        $use  = $c['shareUseCache'] ?? 'no';
+        $pool = ($c['shareCachePool'] ?? '') ?: 'cache';
+        $out[$name] = ['comment' => $c['shareComment'] ?? '',
+                       'pool_only' => in_array($use, ['only', 'prefer'], true) && !empty($ssd[$pool])];
+    }
+    ksort($out, SORT_NATURAL | SORT_FLAG_CASE);
+    return $out;
+}
+
+// What Unwake decided for an SSD-pool-only share (running daemon's report): text for the page
+function pool_only_text($name, $st) {
+    $p = $st['pool_only'][$name] ?? null;
+    if (!$st['running'] || $p === null) return 'SSD pool only - checked against the array disks while Unwake runs';
+    if (!empty($p['on'])) return 'SSD pool only, but ' . implode(', ', $p['on']) . (count($p['on']) == 1 ? ' holds' : ' hold') . ' folders of it - kept in RAM';
+    if (empty($p['known'])) return 'SSD pool only - passed to shfs (array disks not all read yet)';
+    return 'SSD pool only, can\'t wake a disk - passed to shfs';
+}
+
+// is a share cached, by the settings and the pool-only rule
+function share_cached($name, $info, $cfg) {
+    $list = fn($k) => array_filter(array_map('trim', explode(',', $cfg[$k] ?? '')));
+    if (in_array($name, $list('EXCLUDED_SHARES'), true)) return false;
+    if (in_array($name, $list('INCLUDED_SHARES'), true)) return true;
+    return !$info['pool_only'];
+}
+
+function fmt_bytes($n) {
+    $u = ['B','KB','MB','GB','TB'];
+    $i = 0;
+    $v = (float)$n;
+    while ($v >= 1024 && $i < count($u) - 1) { $v /= 1024; $i++; }
+    return ($v >= 100 ? round($v) : round($v, 1)) . ' ' . $u[$i];
+}
+
+function fmt_count($n) {
+    if ($n >= 1e6) return round($n / 1e6, $n >= 1e7 ? 0 : 1) . 'M';
+    if ($n >= 1e4) return round($n / 1e3) . 'k';
+    return number_format($n);
+}
+
+function fmt_dur($ms) {
+    $s = (int)round($ms / 1000);
+    if ($s >= 3600) return intdiv($s, 3600) . 'h ' . intdiv($s % 3600, 60) . 'm';
+    if ($s >= 60) return intdiv($s, 60) . 'm ' . ($s % 60) . 's';
+    return $s . 's';
+}
+
+function fmt_when($epoch) {
+    return date(date('Y-m-d', $epoch) === date('Y-m-d') ? 'H:i' : 'M j H:i', $epoch);
+}
+
+// Dot before a disk name: green while spinning, an empty circle while spun down
+function spin_mark($spinning, $ssd = false) {
+    if ($ssd) return '<span class="uw-spin on" title="No spin-down (SSD)"></span>';
+    return $spinning ? '<span class="uw-spin on" title="Spinning"></span>' : '<span class="uw-spin" title="Spun down"></span>';
+}
+
+// Detached instances that still serve something (stopped or restarted while in use)
+function older_text($older) {
+    if (!$older) return '';
+    $when = implode(', ', array_map(fn($t) => $t ? date(date('Y-m-d') === date('Y-m-d', $t) ? 'H:i' : 'M j H:i', $t) : '?', $older));
+    return (count($older) === 1 ? 'An older Unwake is' : count($older) . ' older Unwake instances are') .
+           ' still in use (stopped ' . $when . '). Each one exits once nothing uses it any more.';
+}
+
+// Status sections for the page and the poll: summary lines and detail tables (HTML)
+function status_view($st) {
+    $v = ['status' => '', 'color' => '#f87171', 'cache' => '', 'cache_detail' => '', 'hits' => '', 'hits_detail' => '',
+          'disks' => '', 'version' => $st['version'] ?? '', 'older' => older_text($st['older'] ?? [])];
+    $mt = user_mount_type();
+    if (!$st['running']) {
+        $v['status'] = $mt === '' ? 'Stopped (array not started)' : 'Stopped';
+        return $v;
+    }
+    $state = $st['state'] ?? 'starting';
+    if ($state === 'running' && $mt === 'fuse.unwake') { $v['status'] = 'Running'; $v['color'] = '#4ade80'; }
+    elseif ($state === 'draining') { $v['status'] = 'Detached - serving open files until they are closed'; $v['color'] = '#facc15'; }
+    elseif ($state === 'running') { $v['status'] = 'Running, but not on top of /mnt/user'; $v['color'] = '#facc15'; }
+    else { $v['status'] = ucfirst($state); $v['color'] = '#facc15'; }
+    if (empty($st['caching']) && $state === 'running') { $v['status'] .= ' (pass-through only, caching off - see the log)'; $v['color'] = '#facc15'; }
+
+    $v['cache'] = fmt_count($st['dirs'] ?? 0) . ' folders, ' . fmt_count($st['entries'] ?? 0) . ' names, ' .
+                  fmt_bytes(($st['rss_kb'] ?? 0) * 1024) . ' RAM';
+    $v['cache_detail'] = '<div class="uw-grid uw-grid-2">' .
+        '<span>Folders</span><span>' . number_format($st['dirs'] ?? 0) . '</span>' .
+        '<span>Names</span><span>' . number_format($st['entries'] ?? 0) . '</span>' .
+        '<span>Names the kernel holds an inode for</span><span>' . number_format($st['inodes'] ?? 0) . '</span>' .
+        '<span>RAM used by unwaked</span><span>' . fmt_bytes(($st['rss_kb'] ?? 0) * 1024) . '</span>' .
+        '<span>Changes seen on the disks</span><span>' . number_format($st['events'] ?? 0) . '</span>' .
+        '<span>File data</span><span>' . (!empty($st['passthrough']) ? 'kernel passthrough' : 'through unwaked') . '</span>' .
+        '<span>Running since</span><span>' . (isset($st['started']) ? fmt_when($st['started']) : '-') . '</span></div>';
+
+    $rows = [['Listings', 'readdir'], ['Name lookups', 'lookup'], ['Attributes', 'getattr'], ['Extended attributes', 'xattr']];
+    $hit = $all = 0;
+    $tbl = '<div class="uw-grid uw-grid-4"><span></span><span>From RAM</span><span>From shfs</span><span>Share</span>';
+    foreach ($rows as [$label, $k]) {
+        $h = ($st["{$k}_hit"] ?? 0) + ($k === 'lookup' ? ($st['lookup_neg'] ?? 0) : 0);
+        $m = $st["{$k}_miss"] ?? 0;
+        $hit += $h; $all += $h + $m;
+        $tbl .= "<span>$label</span><span>" . number_format($h) . '</span><span>' . number_format($m) . '</span><span>' .
+                ($h + $m ? round(100 * $h / ($h + $m), 1) . '%' : '-') . '</span>';
+    }
+    $tbl .= '<span>Name lookups of missing files</span><span>' . number_format($st['lookup_neg'] ?? 0) . '</span><span></span><span></span>';
+    $tbl .= '<span>Files read straight from their disk</span><span>' . number_format($st['open_direct'] ?? 0) . '</span><span>' .
+            number_format($st['open_shfs'] ?? 0) . '</span><span></span></div>';
+    $v['hits'] = $all ? round(100 * $hit / $all, 1) . '% of ' . fmt_count($all) . ' requests answered from RAM' : 'No requests yet';
+    $v['hits_detail'] = $tbl;
+
+    $cards = '';
+    foreach ($st['branches'] ?? [] as $b) {
+        $ssd = empty($b['rotational']);
+        if (!empty($b['untracked'])) $state = '<span class="red-text">changes can\'t be watched</span>';
+        elseif (!empty($b['harvesting'])) $state = 'reading its folders now';
+        elseif (!empty($b['harvested'])) $state = fmt_count($b['dirs']) . ' folders, read ' . fmt_when($b['harvested_at']) .
+                                                  ' in ' . fmt_dur($b['harvest_ms']);
+        else $state = $b['up'] ? 'waiting' : 'read when it next spins up';
+        $cards .= '<div class="uw-disk-row"><span class="uw-disk-name">' . spin_mark(!empty($b['up']), $ssd) . ' ' .
+                  htmlspecialchars($b['name']) . '</span><span class="uw-muted">' . $state . '</span></div>';
+    }
+    $v['disks'] = $cards;
+    $v['pool_only'] = [];
+    foreach (array_keys($st['pool_only'] ?? []) as $name) $v['pool_only'][$name] = pool_only_text($name, $st);
+    return $v;
+}
+
+// The newest $entries log entries, exact repeats in a row folded into one:
+// "<first time> [DEBUG] readdir hit x (25x until <last time>)". An entry is a line with
+// a timestamp plus the indented lines below it.
+function log_tail($entries) {
+    $out = [];
+    exec('tail -n ' . (int)($entries * 20) . ' ' . escapeshellarg(UNWAKE_LOG) . ' 2>/dev/null', $out);
+    $groups = [];   // [first ts, last ts, body (first line after ts + continuation lines), count]
+    $cur = null;
+    $flush = function () use (&$cur, &$groups) {
+        if ($cur === null) return;
+        $n = count($groups);
+        if ($n && $groups[$n - 1][2] === $cur[1]) { $groups[$n - 1][1] = $cur[0]; $groups[$n - 1][3]++; }
+        else $groups[] = [$cur[0], $cur[0], $cur[1], 1];
+        $cur = null;
+    };
+    foreach ($out as $line) {
+        if (preg_match('/^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (.*)$/', $line, $m)) { $flush(); $cur = [$m[1], $m[2]]; }
+        elseif ($cur !== null) $cur[1] .= "\n" . $line;
+        // continuation lines cut off at the start of the tail are dropped
+    }
+    $flush();
+    $lines = [];
+    foreach (array_slice($groups, -$entries) as [$first, $last, $body, $n]) {
+        if ($n > 1) {
+            $until = substr($first, 0, 10) === substr($last, 0, 10) ? substr($last, 11) : $last;
+            $nl = strpos($body, "\n");
+            $suffix = " ({$n}x until $until)";
+            $body = $nl === false ? $body . $suffix : substr($body, 0, $nl) . $suffix . substr($body, $nl);
+        }
+        $lines[] = "$first $body";
+    }
+    return implode("\n", $lines);
+}

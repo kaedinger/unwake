@@ -1,0 +1,4 @@
+#!/bin/bash
+# Docker and VMs are down; Unraid is about to unmount shfs. unwake must be gone first.
+/etc/rc.d/rc.unwake stop --array >/dev/null 2>&1
+exit 0

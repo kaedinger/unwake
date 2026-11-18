@@ -1,0 +1,18 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+unwaked
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+
+# Package build output (built by CI)
+pkg/
+*.txz
+usr/local/sbin/unwaked
