@@ -48,6 +48,7 @@ setup() {
     echo pool > "$T/mnt/cache/media/shows/on-pool.mkv"
     for i in $(seq 1 20); do echo "note $i" > "$T/mnt/cache/docs/notes/n$i.txt"; done
     setfattr -n user.DOSATTRIB -v archive "$T/mnt/disk1/media/shows/ep-disk1-1.mkv"
+    setfacl -d -m u:nobody:rx "$T/mnt/disk1/media/movies/disk1-only"     # a default ACL Samba reads per folder
     dd if=/dev/urandom of="$T/mnt/disk2/media/movies/big.bin" bs=1M count=20 status=none
     # a mount fanotify can't watch, below a disk (Docker overlay, Unassigned Devices, ...)
     mkdir -p "$T/mnt/disk1/media/tmpmnt"
@@ -164,8 +165,8 @@ check "union listing equals shfs" same_listing
 check "file on two disks listed once" test "$(ls "$T/mnt/user/media/movies" | grep -c same-name.txt)" = 1
 check "file content" test "$(cat "$T/mnt/user/media/shows/on-pool.mkv")" = pool
 check "big file reads intact" cmp -s "$T/mnt/disk2/media/movies/big.bin" "$T/mnt/user/media/movies/big.bin"
-# system.* attributes come from shfs, never the cache (shfs's system.LOCATIONS isn't listed)
-check "system.* xattrs answered by shfs, as through shfs itself" bash -c "test \"\$(getfattr --absolute-names --only-values -n system.posix_acl_access '$T/mnt/user/media/shows/ep-disk1-1.mkv' 2>&1 | sed 's|$T/mnt/user|X|')\" = \"\$(getfattr --absolute-names --only-values -n system.posix_acl_access '$T/ref/media/shows/ep-disk1-1.mkv' 2>&1 | sed 's|$T/ref|X|')\""
+# POSIX ACLs come from the cached set, other system.* ones from shfs (shfs's system.LOCATIONS isn't listed)
+check "missing ACL of a file answered as through shfs itself" bash -c "test \"\$(getfattr --absolute-names --only-values -n system.posix_acl_access '$T/mnt/user/media/shows/ep-disk1-1.mkv' 2>&1 | sed 's|$T/mnt/user|X|')\" = \"\$(getfattr --absolute-names --only-values -n system.posix_acl_access '$T/ref/media/shows/ep-disk1-1.mkv' 2>&1 | sed 's|$T/ref|X|')\""
 check "system.LOCATIONS of a share from RAM" test "$(getfattr --absolute-names --only-values -n system.LOCATIONS "$T/mnt/user/media")" = "cache,disk1,disk2"
 check "system.LOCATIONS of a file from RAM" test "$(getfattr --absolute-names --only-values -n system.LOCATIONS "$T/mnt/user/media/movies/same-name.txt")" = "disk1"
 check "system.LOCATION is the first" test "$(getfattr --absolute-names --only-values -n system.LOCATION "$T/mnt/user/media/shows")" = "cache"
@@ -228,9 +229,14 @@ kill "$SUP"; wait "$SUP" 2>/dev/null
 start_unwake && wait_harvest
 drop
 r0=$(reads disk1 disk2)
-(cd "$T/mnt/user" && getfattr -R -d media/shows media/movies media/deep >/dev/null 2>&1; getfattr -n system.LOCATIONS docs appdata media >/dev/null 2>&1)
+(cd "$T/mnt/user" && getfattr -R -d media/shows media/movies media/deep >/dev/null 2>&1; getfattr -n system.LOCATIONS docs appdata media >/dev/null 2>&1
+ getfattr -n system.posix_acl_default media/movies/* media/shows media/deep/a/b/c/d/e/f/g/* >/dev/null 2>&1)
 r1=$(reads disk1 disk2)
-check "xattrs of never-touched files and locations of passed-through shares: 0 array reads (got $((r1 - r0)))" test "$r1" -eq "$r0"
+check "xattrs and ACLs of never-touched files and locations of passed-through shares: 0 array reads (got $((r1 - r0)))" test "$r1" -eq "$r0"
+check "default ACL from RAM, as through shfs" test "$(getfacl -d --omit-header "$T/mnt/user/media/movies/disk1-only")" = "$(getfacl -d --omit-header "$T/ref/media/movies/disk1-only")"
+check "no default ACL from RAM, as through shfs" test "$(getfacl -d --omit-header "$T/mnt/user/media/shows")" = "$(getfacl -d --omit-header "$T/ref/media/shows")"
+setfacl -d -m u:nobody:rwx "$T/mnt/disk1/media/movies/disk1-only"; sleep 2
+check "ACL changed straight on the disk shows up" bash -c "getfacl -d --omit-header '$T/mnt/user/media/movies/disk1-only' | grep -q 'user:nobody:rwx'"
 check "harvested xattr value" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = archive
 setfattr -n user.DOSATTRIB -v changed "$T/mnt/disk1/media/shows/ep-disk1-1.mkv"; sleep 2
 check "xattr changed straight on the disk shows up" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = changed

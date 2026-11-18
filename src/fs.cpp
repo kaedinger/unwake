@@ -1101,10 +1101,13 @@ static void op_getxattr(fuse_req_t req, fuse_ino_t ino, const char* name, size_t
         if (size < loc.size()) return (void)fuse_reply_err(req, ERANGE);
         return (void)fuse_reply_buf(req, loc.data(), loc.size());
     }
-    // Straight to shfs: the root of /mnt/user, and every system.* attribute. shfs computes
-    // some of these on request without listing them (system.LOCATION, system.LOCATIONS:
-    // the disks holding a file, used by the File Manager, the VM manager and moves).
-    if (rel.empty() || !strncmp(name, "system.", 7)) {
+    // Straight to shfs: the root of /mnt/user, and every system.* attribute but the POSIX
+    // ACLs. shfs computes some of these on request without listing them (system.LOCATION,
+    // system.LOCATIONS: the disks holding a file, used by the File Manager, the VM manager
+    // and moves). The ACLs are stored and listed like user.* ones, so the cached set
+    // answers them; Samba asks for system.posix_acl_default of every folder it lists.
+    bool acl = !strcmp(name, "system.posix_acl_access") || !strcmp(name, "system.posix_acl_default");
+    if (rel.empty() || (!acl && !strncmp(name, "system.", 7))) {
         if (!rel.empty()) note_shfs("xattr", rel, {}, name);
         std::vector<char> v(size ? size : 0);
         auto p = proc_path(rel);
