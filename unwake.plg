@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.18.46398-beta">
+  <!ENTITY version   "2026.11.18.78088-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,6 +20,14 @@
 >
 
 <CHANGES>
+### 2026.11.18.78088-beta
+- ui: Apply button back in the settings column (an empty label is hidden by Unraid 7 and shifted the grid)
+- ui: no extra gap above Apply while the Shares in RAM help is closed
+- fix: POSIX ACL reads (Samba asks for every folder it lists) answered from RAM, they woke the disks when browsing over SMB
+- fix: changes to a folder's own permissions, owner or xattrs made straight on a disk are followed
+- log: a spin-up no longer lists requests in pool-only shares as possible causes
+- log: with debug logging, a spin-up names the process behind each request passed to shfs
+
 ### 2026.11.18.46398-beta
 - Initial release: Unwake sits on top of /mnt/user and answers folder listings, name lookups, attributes and extended attributes from RAM, so they don't wake sleeping disks
 - folders of a disk are read while it spins anyway, at idle priority, never waking it
