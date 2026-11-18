@@ -67,8 +67,9 @@ static Mask disks_of_dir(const std::string& dir) {
     for (auto& c : split_path(dir)) {
         if (!sure) break;
         auto it = d->entries.find(c);
-        if (it == d->entries.end() || !it->second.dir || !it->second.mask) break;
-        m = it->second.mask;
+        if (it == d->entries.end() || !it->second.mask) break;
+        m = it->second.mask;                    // a sure level knows its entries' disks
+        if (!it->second.dir) break;             // not read (a share passed to shfs): bounded by that
         d = it->second.dir.get();
         sure = tree_all_known(d);
     }

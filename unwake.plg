@@ -25,6 +25,7 @@
 - ui: no extra gap above Apply while the Shares in RAM help is closed
 - fix: POSIX ACL reads (Samba asks for every folder it lists) answered from RAM, they woke the disks when browsing over SMB
 - fix: changes to a folder's own permissions, owner or xattrs made straight on a disk are followed
+- log: a spin-up no longer lists requests in pool-only shares as possible causes
 
 ### 2026.11.18.46398-beta
 - Initial release: Unwake sits on top of /mnt/user and answers folder listings, name lookups, attributes and extended attributes from RAM, so they don't wake sleeping disks
