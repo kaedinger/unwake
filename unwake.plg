@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.18.42594-beta">
+  <!ENTITY version   "2026.11.18.46398-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,7 +20,7 @@
 >
 
 <CHANGES>
-### next
+### 2026.11.18.46398-beta
 - Initial release: Unwake sits on top of /mnt/user and answers folder listings, name lookups, attributes and extended attributes from RAM, so they don't wake sleeping disks
 - folders of a disk are read while it spins anyway, at idle priority, never waking it
 - every change on disks and pools is followed via fanotify: Mover, direct writes to /mnt/diskN, containers, ZFS datasets
