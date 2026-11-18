@@ -247,7 +247,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
 <?php endif; ?>
   </dd>
 <?php endforeach; ?>
-  <dt></dt>
+  <dt>&nbsp;</dt>
   <dd><div class="uw-help" id="uw-shares-help">Ticked shares have their folders kept in RAM by Unwake. Untick a share to pass it straight to shfs: Unwake then neither keeps it in RAM nor answers for it, as if Unwake weren't there. Shares whose settings put them on an SSD pool only are decided by Unwake: they can't wake a disk, so they're passed to shfs - unless an array disk still holds folders of them (left over from an older setup, or the Mover moving towards the pool after the pool ran full). Then shfs would check that disk on every listing, and Unwake keeps the share in RAM. Don't forget to click <strong>Apply</strong> below!</div></dd>
 
   <dt>&nbsp;</dt>

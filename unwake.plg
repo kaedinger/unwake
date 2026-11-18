@@ -20,6 +20,9 @@
 >
 
 <CHANGES>
+### next
+- ui: Apply button back in the settings column (an empty label is hidden by Unraid 7 and shifted the grid)
+
 ### 2026.11.18.46398-beta
 - Initial release: Unwake sits on top of /mnt/user and answers folder listings, name lookups, attributes and extended attributes from RAM, so they don't wake sleeping disks
 - folders of a disk are read while it spins anyway, at idle priority, never waking it
