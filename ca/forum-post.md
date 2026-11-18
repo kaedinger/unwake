@@ -81,4 +81,4 @@ Then turn off Dynamix Cache Directories under *Settings → Folder Caching*, and
 
 ## AI disclaimer / History
 
-*(Florian: your words here, like in Unspin's post. The README says so far: Unwake came out of Unspin's disk wake-up tracking - once it showed who woke the disks, most of the wake-ups turned out to be folder listings and name lookups that Cache Directories couldn't keep in memory. Unwake was designed and written with Claude (Anthropic) in Claude Code, and tested on your own server.)*
+Unwake came out of Unspin's disk wake-up tracking - once it showed who woke the disks, most of the wake-ups turned out to be folder listings and name lookups that Cache Directories couldn't keep in memory. Unwake was designed and written with Claude Code, and tested on my own server.
