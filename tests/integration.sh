@@ -237,6 +237,8 @@ check "default ACL from RAM, as through shfs" test "$(getfacl -d --omit-header "
 check "no default ACL from RAM, as through shfs" test "$(getfacl -d --omit-header "$T/mnt/user/media/shows")" = "$(getfacl -d --omit-header "$T/ref/media/shows")"
 setfacl -d -m u:nobody:rwx "$T/mnt/disk1/media/movies/disk1-only"; sleep 2
 check "ACL changed straight on the disk shows up" bash -c "getfacl -d --omit-header '$T/mnt/user/media/movies/disk1-only' | grep -q 'user:nobody:rwx'"
+chmod 750 "$T/mnt/disk1/media/movies/disk1-only"; sleep 2
+check "folder mode changed straight on the disk shows up" test "$(stat -c %a "$T/mnt/user/media/movies/disk1-only")" = 750
 check "harvested xattr value" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = archive
 setfattr -n user.DOSATTRIB -v changed "$T/mnt/disk1/media/shows/ep-disk1-1.mkv"; sleep 2
 check "xattr changed straight on the disk shows up" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = changed

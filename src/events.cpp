@@ -267,7 +267,9 @@ static void handle(const struct fanotify_event_metadata* ev, std::map<std::strin
     }
     auto* fh = (struct file_handle*)info->handle;
     const char* name = (const char*)(fh->f_handle + fh->handle_bytes);
-    if (!*name || !strcmp(name, ".")) return;
+    // a folder's own change (chmod, chown, xattrs, ACLs) comes as the folder itself, name "."
+    bool self = !*name || !strcmp(name, ".");
+    if (self && !(ev->mask & (FAN_ATTRIB | FAN_MODIFY))) return;
 
     // which mark: same fsid as the statfs of the mount
     int dfd = -1;
@@ -309,6 +311,12 @@ static void handle(const struct fanotify_event_metadata* ev, std::map<std::strin
     std::string rel;
     int b = branch_of_path(abs, rel);
     if (b < 0 || !tree_cacheable(rel)) { close(dfd); return; }
+    if (self) {
+        auto slash = rel.rfind('/');
+        if (!rel.empty()) restat_later(b, slash == std::string::npos ? "" : rel.substr(0, slash), rel.substr(slash + 1));
+        close(dfd);
+        return;
+    }
 
     if (ev->mask & (FAN_CREATE | FAN_MOVED_TO)) {
         struct stat st;
