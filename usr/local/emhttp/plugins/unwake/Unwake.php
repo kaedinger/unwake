@@ -274,7 +274,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
   <span class="uw-footer-sep">·</span>
   <a href="https://github.com/sponsors/kaedinger" target="_blank" rel="noopener">Sponsor ♥ - THANK YOU</a>
   <span class="uw-footer-sep">·</span>
-  <a href="#" onclick="return false;" title="Donation link follows with the first public release">Donate ♥ - THANK YOU</a>
+  <a href="https://www.paypal.com/donate/?hosted_button_id=ZAR7SALQJDUNW" target="_blank" rel="noopener">Donate ♥ - THANK YOU</a>
   <div id="uw-channel" title="Installed: Unwake v<?= htmlspecialchars($version) ?>">
     <input type="checkbox" id="uw-ch-switch">
     <button type="button" id="uw-ch-go" disabled>Switch</button>
