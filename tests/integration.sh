@@ -246,9 +246,12 @@ check "xattr changed straight on the disk shows up" test "$(getfattr --only-valu
 echo disk2 > "$T/run/test-spundown"; sleep 2.5
 n0=$(grep -c 'disk2 spun up' "$T/unwake.log")
 cat "$T/mnt/user/docs/notes/n1.txt" >/dev/null
+touch "$T/mnt/user/media/movies/disk2-only/who-test"
 rm -f "$T/run/test-spundown"; sleep 2.5
 check "spin-up logged" test "$(grep -c 'disk2 spun up' "$T/unwake.log")" -gt "$n0"
 check "requests in a pool-only share aren't listed for an array disk" bash -c "! tac '$T/unwake.log' | sed '/disk2 spun up/q' | grep -q docs/notes/n1.txt"
+check "debug log names the process behind a request" bash -c "tac '$T/unwake.log' | sed '/disk2 spun up/q' | grep -q 'create media/movies/disk2-only/who-test \\[touch [0-9]*, parent '"
+rm -f "$T/mnt/user/media/movies/disk2-only/who-test"
 
 say "spun-down disk is never read"
 kill "$SUP"; wait "$SUP" 2>/dev/null

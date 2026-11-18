@@ -13,6 +13,7 @@
 #include "unwaked.h"
 
 #include <cstring>
+#include <fstream>
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -33,16 +34,65 @@ static constexpr uint64_t FUSE_UNKNOWN_INO = 0xffffffff;
 // ---------------------------------------------------------------------------
 // What went to shfs lately: when a disk spins up, the log lists these
 // ---------------------------------------------------------------------------
-struct ShfsReq { int64_t ms; const char* op; std::string rel, to, note; Mask mask; };
+struct ShfsReq { int64_t ms; const char* op; std::string rel, to, note; Mask mask; std::string who; };
 static std::mutex _req_mu;
 static std::vector<ShfsReq> _reqs;      // ring
 static size_t _req_next = 0;
 static constexpr size_t REQ_RING = 512;
 static constexpr int64_t REQ_WINDOW = 30000, REQ_WINDOW_WRITE = 120000;
 
+// Who sent the request being handled on this thread (FUSE gives the caller's thread id),
+// named only with debug logging: "qemu-img 1234, parent php-fpm 99"
+static thread_local pid_t t_caller = 0;
+
+template <auto F> struct Caller;
+template <typename... A, void (*F)(fuse_req_t, A...)>
+struct Caller<F> {
+    static void call(fuse_req_t req, A... a) { t_caller = fuse_req_ctx(req)->pid; F(req, a...); }
+};
+
+static std::string proc_line(const std::string& path) {
+    std::ifstream f(path);
+    std::string s;
+    std::getline(f, s);
+    return s;
+}
+
+static std::string caller_name(pid_t tid) {
+    if (tid <= 0) return {};
+    static std::mutex mu;
+    static std::unordered_map<pid_t, std::pair<int64_t, std::string>> cache;   // tid -> (when, name)
+    auto now = now_ms();
+    {
+        std::lock_guard<std::mutex> l(mu);
+        auto it = cache.find(tid);
+        if (it != cache.end() && it->second.first > now - 5000) return it->second.second;
+    }
+    pid_t tgid = tid, ppid = 0;
+    {
+        std::ifstream f("/proc/" + std::to_string(tid) + "/status");
+        std::string line;
+        while (std::getline(f, line)) {
+            if (!line.compare(0, 5, "Tgid:")) tgid = (pid_t)atoi(line.c_str() + 5);
+            else if (!line.compare(0, 5, "PPid:")) { ppid = (pid_t)atoi(line.c_str() + 5); break; }
+        }
+    }
+    std::string comm = proc_line("/proc/" + std::to_string(tgid) + "/comm");
+    std::string who = (comm.empty() ? std::string("?") : comm) + " " + std::to_string(tgid);
+    if (ppid > 0) {
+        std::string pc = proc_line("/proc/" + std::to_string(ppid) + "/comm");
+        who += ", parent " + (pc.empty() ? std::string("?") : pc) + " " + std::to_string(ppid);
+    }
+    std::lock_guard<std::mutex> l(mu);
+    if (cache.size() > 1024) cache.clear();
+    cache[tid] = {now, who};
+    return who;
+}
+
 void note_shfs(const char* op, const std::string& rel, const std::string& to, const std::string& note, Mask mask) {
+    std::string who = g_debug ? caller_name(t_caller) : std::string();
     std::lock_guard<std::mutex> l(_req_mu);
-    ShfsReq r{now_ms(), op, rel, to, note, mask};
+    ShfsReq r{now_ms(), op, rel, to, note, mask, std::move(who)};
     if (_reqs.size() < REQ_RING) _reqs.push_back(std::move(r));
     else _reqs[_req_next] = std::move(r);
     _req_next = (_req_next + 1) % REQ_RING;
@@ -110,7 +160,8 @@ std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& othe
         localtime_r(&s, &tm);
         strftime(t, sizeof t, "%H:%M:%S", &tm);
         out.push_back(std::string(t) + " " + r.op + " " + (r.rel.empty() ? "/" : r.rel) +
-                      (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note));
+                      (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note) +
+                      (r.who.empty() ? "" : " [" + r.who + "]"));
     }
     return out;
 }
@@ -1171,21 +1222,21 @@ const struct fuse_lowlevel_ops* fs_ops() {
     static struct fuse_lowlevel_ops ops = [] {
         struct fuse_lowlevel_ops o = {};
         o.init = op_init;
-        o.lookup = op_lookup;
+        o.lookup = Caller<op_lookup>::call;
         o.forget = op_forget;
         o.forget_multi = op_forget_multi;
-        o.getattr = op_getattr;
-        o.setattr = op_setattr;
-        o.readlink = op_readlink;
-        o.mknod = op_mknod;
-        o.mkdir = op_mkdir;
-        o.symlink = op_symlink;
-        o.link = op_link;
-        o.unlink = op_unlink;
-        o.rmdir = op_rmdir;
-        o.rename = op_rename;
-        o.open = op_open;
-        o.create = op_create;
+        o.getattr = Caller<op_getattr>::call;
+        o.setattr = Caller<op_setattr>::call;
+        o.readlink = Caller<op_readlink>::call;
+        o.mknod = Caller<op_mknod>::call;
+        o.mkdir = Caller<op_mkdir>::call;
+        o.symlink = Caller<op_symlink>::call;
+        o.link = Caller<op_link>::call;
+        o.unlink = Caller<op_unlink>::call;
+        o.rmdir = Caller<op_rmdir>::call;
+        o.rename = Caller<op_rename>::call;
+        o.open = Caller<op_open>::call;
+        o.create = Caller<op_create>::call;
         o.read = op_read;
         o.write_buf = op_write_buf;
         o.flush = op_flush;
@@ -1194,16 +1245,16 @@ const struct fuse_lowlevel_ops* fs_ops() {
         o.fallocate = op_fallocate;
         o.lseek = op_lseek;
         o.copy_file_range = op_copy_file_range;
-        o.opendir = op_opendir;
-        o.readdir = op_readdir;
-        o.readdirplus = op_readdirplus;
+        o.opendir = Caller<op_opendir>::call;
+        o.readdir = Caller<op_readdir>::call;
+        o.readdirplus = Caller<op_readdirplus>::call;
         o.releasedir = op_releasedir;
         o.fsyncdir = op_fsyncdir;
         o.statfs = op_statfs;
-        o.getxattr = op_getxattr;
-        o.listxattr = op_listxattr;
-        o.setxattr = op_setxattr;
-        o.removexattr = op_removexattr;
+        o.getxattr = Caller<op_getxattr>::call;
+        o.listxattr = Caller<op_listxattr>::call;
+        o.setxattr = Caller<op_setxattr>::call;
+        o.removexattr = Caller<op_removexattr>::call;
         return o;
     }();
     nodes_init();
