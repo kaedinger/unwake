@@ -189,4 +189,4 @@ GPLv2. Contributions welcome - open an issue or PR on GitHub.
 
 ## History
 
-Unwake came out of [Unspin](https://github.com/kaedinger/unspin)'s disk wake-up tracking: once it showed *who* woke the disks, most of the wake-ups turned out to be folder listings and name lookups that Dynamix Cache Directories couldn't keep in memory. Unwake was designed and written with Claude (Anthropic) in Claude Code, and tested on the author's own server.
+Unwake came out of [Unspin](https://github.com/kaedinger/unspin)'s disk wake-up tracking: once it showed *who* woke the disks, most of the wake-ups turned out to be folder listings and name lookups that Dynamix Cache Directories couldn't keep in memory. Unwake was designed and written with Claude Code, and tested on the author's own server.
