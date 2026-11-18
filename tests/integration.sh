@@ -242,6 +242,13 @@ check "folder mode changed straight on the disk shows up" test "$(stat -c %a "$T
 check "harvested xattr value" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = archive
 setfattr -n user.DOSATTRIB -v changed "$T/mnt/disk1/media/shows/ep-disk1-1.mkv"; sleep 2
 check "xattr changed straight on the disk shows up" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = changed
+# all disks read: a pool-only share passed to shfs is known not to be on disk2
+echo disk2 > "$T/run/test-spundown"; sleep 2.5
+n0=$(grep -c 'disk2 spun up' "$T/unwake.log")
+cat "$T/mnt/user/docs/notes/n1.txt" >/dev/null
+rm -f "$T/run/test-spundown"; sleep 2.5
+check "spin-up logged" test "$(grep -c 'disk2 spun up' "$T/unwake.log")" -gt "$n0"
+check "requests in a pool-only share aren't listed for an array disk" bash -c "! tac '$T/unwake.log' | sed '/disk2 spun up/q' | grep -q docs/notes/n1.txt"
 
 say "spun-down disk is never read"
 kill "$SUP"; wait "$SUP" 2>/dev/null
@@ -254,11 +261,9 @@ r1=$(reads disk2)
 check "harvester leaves the sleeping disk alone (disk2 reads: $((r1 - r0)))" test "$r1" -eq "$r0"
 check "while the awake disks are harvested" test "$(stat_json "[b['harvested'] for b in d['branches'] if b['name']=='disk1'][0]")" = 1
 check "listing correct while disk2 sleeps (passthrough)" same_listing
-cat "$T/mnt/user/docs/notes/n1.txt" >/dev/null     # pool-only share, passed to shfs: never disk2's
 rm -f "$T/run/test-spundown"
 sleep 2.5
 check "spin-up is logged with what Unwake passed to shfs before it" grep -q 'disk2 spun up - Unwake passed [0-9]* request' "$T/unwake.log"
-check "requests in a pool-only share aren't listed for an array disk" bash -c "! tac '$T/unwake.log' | sed '/disk2 spun up/q' | grep -q docs/notes/n1.txt"
 grep -A3 'disk2 spun up' "$T/unwake.log" | head -4 | sed 's/^/  log: /'
 wait_harvest
 f1=r1; f2=r2; echo a > "$T/mnt/disk1/media/movies/disk1-only/$f1"; echo b > "$T/mnt/disk2/media/movies/disk2-only/$f2"; sleep 1
