@@ -64,6 +64,9 @@ struct Config {
     std::shared_ptr<const std::vector<std::string>> excluded_shares = std::make_shared<std::vector<std::string>>();
     // union paths below a mount fanotify can't watch (overlay, tmpfs, ...): never cached
     std::shared_ptr<const std::vector<std::string>> uncached_paths = std::make_shared<std::vector<std::string>>();
+    std::string verify_log   = "/var/log/unwake-verify.log";
+    std::atomic<bool> verify{false};        // VERIFY=yes (a beta build verifies anyway)
+    std::atomic<long> verify_rate{4};       // VERIFY_RATE: folders per second and disk
     long        log_max_mb   = 16;
     long        log_trim_mb  = 2;
 };
@@ -175,13 +178,24 @@ extern std::vector<std::unique_ptr<Branch>> g_branches;
 bool  branches_load();                   // disks.ini or --branch; false if none
 void  spin_poll();                       // refresh Branch::up
 int   branch_of_path(const std::string& abs, std::string& rel);   // -1 if none
-void  harvester_start();
+// one directory of a branch, as on the disk (names, stat, xattrs); false: gone or unreadable
+struct Item { std::string name; Attr attr; bool is_dir; uint8_t dtype; dev_t dev; std::shared_ptr<const Xattrs> xattrs; };
+bool  read_slice(const std::string& abs, std::vector<Item>& out);
+void  harvester_start();                 // also starts the verifier (verify.cpp)
 void  harvester_stop();
 void  harvester_restart(int b);          // re-walk later (after a lost event)
 bool  array_stopping();                  // var.ini says the array is going down
 void  apply_exclusions();                // effective excluded shares from config + share settings
 void  recompute_exclusions();            // SSD-pool-only shares: passed through unless an array disk holds them
 std::string pool_only_json();            // {"share": {"known": 0|1, "on": ["disk2"]}}
+
+// ---------------------------------------------------------------------------
+// Verifier (verify.cpp): compares the tree with the disks, slowly, while they spin
+// ---------------------------------------------------------------------------
+void  verify_start();
+void  verify_stop();
+bool  verify_on();                       // VERIFY=yes, or a beta build
+std::string verify_json(int b);          // {"checked":..,"total":..,"diffs":..,"passes":..}
 
 // ---------------------------------------------------------------------------
 // fanotify (events.cpp)
@@ -222,3 +236,5 @@ void note_shfs(const char* op, const std::string& rel, const std::string& to = {
 // requests that may have reached branch b: writes from the last 2 minutes (the journal
 // reaches the disk up to a minute later), everything else from the last 30 s
 std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& others);
+// the last requests passed to shfs for names in dir (of the last 512 requests, any age)
+std::vector<std::string> shfs_recent(const std::string& dir, size_t max);

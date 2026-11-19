@@ -229,6 +229,20 @@ function status_view($st) {
         $cards .= '<div class="uw-disk-row"><span class="uw-disk-name">' . spin_mark(!empty($b['up']), $ssd) . ' ' .
                   htmlspecialchars($b['name']) . '</span><span class="uw-muted">' . $state . '</span></div>';
     }
+    // the verifier (always on in betas): one line per disk
+    if (!empty($st['verifying'])) {
+        foreach ($st['branches'] ?? [] as $b) {
+            $vf = $b['verify'] ?? [];
+            if (empty($b['harvested'])) continue;
+            $d = (int)($vf['diffs'] ?? 0);
+            $line = (!empty($vf['active']) ? 'Verifying ' : 'Verified ') . htmlspecialchars($b['name']) . ': ' .
+                    fmt_count($vf['checked'] ?? 0) . ' of ' . fmt_count($vf['total'] ?? 0) . ' folders checked' .
+                    (!empty($vf['passes']) ? ' (pass ' . ((int)$vf['passes'] + 1) . ')' : '') . ', ' .
+                    ($d ? '<span class="red-text">' . number_format($d) . ' difference' . ($d == 1 ? '' : 's') . '</span>'
+                        : '0 differences');
+            $cards .= '<div class="uw-disk-row"><span class="uw-muted">' . $line . '</span></div>';
+        }
+    }
     $v['disks'] = $cards;
     $v['pool_only'] = [];
     foreach (array_keys($st['pool_only'] ?? []) as $name) $v['pool_only'][$name] = pool_only_text($name, $st);

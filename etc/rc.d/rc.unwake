@@ -246,6 +246,8 @@ unwake_diag() {
         grep -E '^(xfs_buf|xfs_inode|dentry|fuse_inode) ' /proc/slabinfo 2>/dev/null | awk '{print $1, $2}'
         echo "-- log (last 400 lines)"
         tail -n 400 "$LOG_FILE" 2>/dev/null
+        echo "-- verify log (last 400 lines)"
+        tail -n 400 /var/log/unwake-verify.log 2>/dev/null
     } > "$out" 2>&1
     echo "Saved to $out"
 }

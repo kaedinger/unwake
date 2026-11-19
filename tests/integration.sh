@@ -80,7 +80,7 @@ EOF
 
 start_unwake() {
     rm -f "$T/run/ready"
-    "$BIN" --mountpoint "$T/mnt/user" --config "$T/unwake.cfg" --log "$T/unwake.log" --run-dir "$T/run" \
+    "$BIN" --mountpoint "$T/mnt/user" --config "$T/unwake.cfg" --log "$T/unwake.log" --verify-log "$T/verify.log" --run-dir "$T/run" \
            --shares-dir "$T/shares" --branch "cache=$T/mnt/cache,ssd" --branch "disk1=$T/mnt/disk1" --branch "disk2=$T/mnt/disk2" &
     SUP=$!
     for _ in $(seq 1 50); do [ -f "$T/run/ready" ] && break; sleep 0.2; done
@@ -288,6 +288,28 @@ check "spin-up logged" test "$(grep -c 'disk2 spun up' "$T/unwake.log")" -gt "$n
 check "requests in a pool-only share aren't listed for an array disk" bash -c "! tac '$T/unwake.log' | sed '/disk2 spun up/q' | grep -q docs/notes/n1.txt"
 check "debug log names the process behind a request" bash -c "tac '$T/unwake.log' | sed '/disk2 spun up/q' | grep -q 'create media/movies/disk2-only/who-test \\[touch [0-9]*, parent '"
 rm -f "$T/mnt/user/media/movies/disk2-only/who-test"
+
+say "verifier: the tree equals the disks, planted errors are found and repaired"
+vpasses() { stat_json "min(b['verify'].get('passes', 0) for b in d['branches'] if b['harvested'])"; }
+printf 'VERIFY="yes"\nVERIFY_RATE="1000"\n' >> "$T/unwake.cfg"; kill -HUP "$SUP"
+for _ in $(seq 1 60); do sleep 0.5; [ "$(vpasses)" -ge 1 ] && break; done
+check "a full pass on every disk" test "$(vpasses)" -ge 1
+check "no differences after all the tests above" test ! -s "$T/verify.log"
+[ -s "$T/verify.log" ] && sed 's/^/  verify: /' "$T/verify.log" | head -40
+printf 'ghost disk1 media/shows/planted-ghost\ndrop disk2 media/shows/ep-disk2-17.mkv\nsize disk1 media/shows/ep-disk1-5.mkv\n' > "$T/run/test-plant"
+for _ in $(seq 1 60); do sleep 0.5; [ "$(grep -cE '"(planted-ghost|ep-disk2-17.mkv|ep-disk1-5.mkv)"' "$T/verify.log" 2>/dev/null)" -ge 3 ] && break; done
+sed 's/^/  verify: /' "$T/verify.log" | head -20
+check "planted ghost found" grep -q '"planted-ghost": ghost' "$T/verify.log"
+check "planted missing name found" grep -q '"ep-disk2-17.mkv": missing' "$T/verify.log"
+check "planted wrong size found" grep -q '"ep-disk1-5.mkv": size RAM' "$T/verify.log"
+check "repaired: listing equals shfs" same_listing
+check "repaired: size as on the disk" test "$(stat -c %s "$T/mnt/user/media/shows/ep-disk1-5.mkv")" = "$(stat -c %s "$T/mnt/disk1/media/shows/ep-disk1-5.mkv")"
+vdiffs() { stat_json "sum(b['verify']['diffs'] for b in d['branches'])"; }
+for _ in $(seq 1 10); do [ "$(vdiffs)" -ge 3 ] && break; sleep 0.5; done   # status.json is written every 2 s
+check "the count on the status" test "$(vdiffs)" -eq 3
+stat_json "[(b['name'], b['verify']) for b in d['branches']]" | sed 's/^/  verify status: /'
+
+sed -i '/^VERIFY/d' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
 
 say "spun-down disk is never read"
 kill "$SUP"; wait "$SUP" 2>/dev/null

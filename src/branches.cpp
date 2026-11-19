@@ -325,10 +325,8 @@ void harvester_restart(int b) {
     _h_cv.notify_all();
 }
 
-struct Item { std::string name; Attr attr; bool is_dir; uint8_t dtype; dev_t dev; std::shared_ptr<const Xattrs> xattrs; };
-
 // Reads one directory of a branch. false: the directory is gone or unreadable.
-static bool read_slice(const std::string& abs, std::vector<Item>& out) {
+bool read_slice(const std::string& abs, std::vector<Item>& out) {
     int fd = open(abs.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOATIME);
     if (fd < 0) fd = open(abs.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0) return false;
@@ -458,12 +456,14 @@ static void harvest_thread(int b) {
 }
 
 void harvester_start() {
+    verify_start();
     _h_stop = false;
     for (size_t i = 0; i < g_branches.size() && i < (size_t)MAX_BRANCHES; i++)
         _h_threads.emplace_back(harvest_thread, (int)i);
 }
 
 void harvester_stop() {
+    verify_stop();
     _h_stop = true;
     _h_cv.notify_all();
     for (auto& t : _h_threads) t.join();
