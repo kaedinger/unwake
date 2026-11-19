@@ -260,7 +260,7 @@ function status_view($st) {
                 $busy = true;
                 $line = "Verifying $name: waiting" . ($c ? ', ' . number_format($c) . ' of ' . fmt_count($t) . " folders checked, $d" : '...');
             }
-            $v['verify_detail'] .= '<div class="uw-col-text">' . $line . '</div>';
+            $v['verify_detail'] .= '<div class="uw-col-text"' . ($state === 'done' ? ' style="color:#4ade80;"' : '') . '>' . $line . '</div>';
         }
         $v['verify'] = ($busy ? 'Verifying, ' : 'Verify complete, ') . $diffs($f, $r, $p);
     }

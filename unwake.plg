@@ -21,6 +21,7 @@
 
 <CHANGES>
 ### next
+- ui: finished verify lines are green
 - fix: the Verify section remembers whether it was folded open
 
 ### 2026.11.19.54162-beta
