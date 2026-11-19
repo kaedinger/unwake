@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.19.38525-beta">
+  <!ENTITY version   "2026.11.19.51433-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,7 +20,7 @@
 >
 
 <CHANGES>
-### next
+### 2026.11.19.51433-beta
 - feat: betas check the folders in RAM against the disks while they spin, repair differences and log them to unwake-verify.log (VERIFY="yes" in stable versions)
 - fix: a folder's modification time is updated in RAM when files in it are created, deleted or renamed
 - fix: a file's access time (atime) is updated in RAM after it was read; it stayed at its old value
