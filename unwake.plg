@@ -21,6 +21,7 @@
 
 <CHANGES>
 ### next
+- fix: the verifier counts the folders it will check from what's in RAM, not from the disk's last full read
 - fix: the verifier reads a spinning disk only while something else uses it too; its own reads kept disks from spinning down
 - ui: finished verify lines are green
 - fix: the Verify section remembers whether it was folded open

@@ -265,6 +265,15 @@ static uint64_t dev_ios(const Branch& b) {
     return t;
 }
 
+// folders a pass of branch b will check: those the tree knows for it (as the walk goes)
+static uint64_t count_known(const DirNode* d, Mask m) {
+    if (!(d->known & m)) return 0;
+    uint64_t n = 1;
+    for (auto& kv : d->entries)
+        if ((kv.second.mask & m) && kv.second.is_dir && kv.second.dir) n += count_known(kv.second.dir.get(), m);
+    return n;
+}
+
 static bool pause_for(int64_t ms) {
     std::unique_lock<std::mutex> l(_mu);
     _cv.wait_for(l, std::chrono::milliseconds(ms), [] { return _stop.load(); });
@@ -372,7 +381,10 @@ static void verify_thread(int b) {
             if (s.done_at && time(nullptr) < s.done_at + g_cfg.verify_interval && !now_please) { s.state = V_DONE; continue; }
             stack.assign(1, "");
             s.checked = 0;
-            s.total = br.harvest_dirs.load();
+            {
+                std::shared_lock<std::shared_mutex> l(g_tree.mu);
+                s.total = count_known(&g_tree.root, bit(b));
+            }
             s.found = s.pending.load();     // still being repaired from the last pass
             s.repaired = 0;
             in_pass = true;
