@@ -2,7 +2,8 @@
 //
 // One thread per disk or pool, at idle I/O priority. It walks the folders the tree
 // knows for that disk, a few per second (VERIFY_RATE), only while the disk spins
-// anyway and its folders were read once (harvested), and compares each folder's
+// anyway and its folders were read once (harvested) - and on a spinning disk only while
+// something else uses it too, so it never keeps a disk from spinning down - and compares each folder's
 // slice in RAM with the disk: names, type, mode, owner, links, size, the three
 // times, xattrs. A difference only counts if a second look 5 s later shows the same
 // and the folder didn't change in between (a change on its way through fanotify
@@ -253,6 +254,17 @@ static void test_plant() {
 // ---------------------------------------------------------------------------
 // The walk
 // ---------------------------------------------------------------------------
+// The disk's I/O count (reads + writes completed, all its devices); 0 if unknown
+static uint64_t dev_ios(const Branch& b) {
+    uint64_t t = 0;
+    for (auto& d : b.devices) {
+        std::ifstream f("/sys/block/" + d + "/stat");
+        uint64_t rd = 0, x = 0, wr = 0;
+        if (f >> rd >> x >> x >> x >> wr) t += rd + wr;
+    }
+    return t;
+}
+
 static bool pause_for(int64_t ms) {
     std::unique_lock<std::mutex> l(_mu);
     _cv.wait_for(l, std::chrono::milliseconds(ms), [] { return _stop.load(); });
@@ -312,6 +324,11 @@ static void verify_thread(int b) {
     bool in_pass = false;
     struct Retry { std::string rel; int64_t due; uint64_t n; };
     std::vector<Retry> retries;             // confirmed differences whose repair has to wait
+    // A spinning disk is only read while something else uses it too: our own reads would
+    // keep it from spinning down. Its I/O count moving between our reads is someone else.
+    bool watch_io = br.rotational && !br.devices.empty();
+    uint64_t last_io = dev_ios(br);
+    int64_t other_at = 0;                   // when someone else last used the disk
     while (!_stop) {
         long rate = std::max(1L, g_cfg.verify_rate.load());
         if (!pause_for(std::max<int64_t>(1, 1000 / rate))) break;
@@ -319,6 +336,11 @@ static void verify_thread(int b) {
         test_plant();
 #endif
         bool can = verify_on() && g_caching && br.up && br.harvested && !br.untracked && g_cfg.harvest;
+        if (watch_io) {
+            uint64_t io = dev_ios(br);
+            if (io != last_io) { other_at = now_ms(); last_io = io; }
+            if (now_ms() - other_at > 60000) can = false;   // nobody else: let it spin down
+        }
         if (!can) {
             if (in_pass || !s.done_at) s.state = V_WAITING;
             continue;
@@ -329,6 +351,7 @@ static void verify_thread(int b) {
         if (r != retries.end()) {
             uint64_t n = 0;
             Outcome o = check(b, r->rel, nullptr, n, true);
+            if (watch_io) last_io = dev_ios(br);        // that was us
             if (o == FAILED || o == UNSURE) r->due = now_ms() + 60000;
             else {                          // repaired now, or right by itself meanwhile
                 s.repaired += r->n;
@@ -361,6 +384,7 @@ static void verify_thread(int b) {
             std::vector<std::string> subdirs;
             uint64_t n = 0;
             Outcome o = check(b, rel, &subdirs, n, false);
+            if (watch_io) last_io = dev_ios(br);        // that was us
             if (o == REPAIRED) { s.found += n; s.repaired += n; }
             else if (o == FAILED) { s.found += n; s.pending += n; retries.push_back({rel, now_ms() + 60000, n}); }
             s.checked++;
