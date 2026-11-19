@@ -166,6 +166,29 @@ std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& othe
     return out;
 }
 
+std::vector<std::string> shfs_recent(const std::string& dir, size_t max) {
+    std::vector<ShfsReq> v;
+    {
+        std::lock_guard<std::mutex> l(_req_mu);
+        for (auto& r : _reqs)
+            if (dir_of(r.rel) == dir || r.rel == dir || (!r.to.empty() && dir_of(r.to) == dir)) v.push_back(r);
+    }
+    std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.ms < b.ms; });
+    std::vector<std::string> out;
+    for (size_t i = v.size() > max ? v.size() - max : 0; i < v.size(); i++) {
+        auto& r = v[i];
+        char t[32];
+        time_t s = r.ms / 1000;
+        struct tm tm;
+        localtime_r(&s, &tm);
+        strftime(t, sizeof t, "%m-%d %H:%M:%S", &tm);
+        out.push_back(std::string(t) + " " + r.op + " " + (r.rel.empty() ? "/" : r.rel) +
+                      (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note) +
+                      (r.who.empty() ? "" : " [" + r.who + "]"));
+    }
+    return out;
+}
+
 // An error for the client. Expected ones only in the debug log.
 static void fail(fuse_req_t req, const char* op, const std::string& rel, int e) {
     if (e == EIO || e == ENOTCONN || e == ESTALE || e == EBADF || e == ENOMEM || e == EFAULT || e == EINVAL)

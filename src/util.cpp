@@ -159,6 +159,14 @@ std::vector<std::string> load_config() {
     if (kv.count("LOG_LEVEL")) g_cfg.debug = kv["LOG_LEVEL"] == "debug";
     yesno("HARVEST", g_cfg.harvest);
     yesno("RETURN_RAM", g_cfg.return_ram);
+    // not on the settings page (betas verify anyway): a missing key means the default
+    g_cfg.verify = false;
+    yesno("VERIFY", g_cfg.verify);
+    {
+        long r = 4;
+        number("VERIFY_RATE", r, 1);
+        g_cfg.verify_rate = r;
+    }
     if (kv.count("DATA_PATH")) {
         if (kv["DATA_PATH"] == "direct") g_cfg.direct_reads = true;
         else if (kv["DATA_PATH"] == "shfs") g_cfg.direct_reads = false;

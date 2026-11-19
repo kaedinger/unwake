@@ -143,6 +143,7 @@ static void write_status(const std::string& state, time_t started) {
     n("started", (uint64_t)started);
     n("updated", (uint64_t)time(nullptr));
     n("caching", g_caching ? 1 : 0);
+    n("verifying", verify_on() ? 1 : 0);
     n("passthrough", g_passthrough ? 1 : 0);
     n("handover", HANDOVER_FORMAT);   // takes an in-place upgrade (rc.unwake upgrade)
     n("dirs", g_tree.dirs);
@@ -165,7 +166,8 @@ static void write_status(const std::string& state, time_t started) {
           << jstr("up") << ":" << (b.up ? 1 : 0) << "," << jstr("rotational") << ":" << (b.rotational ? 1 : 0) << ","
           << jstr("harvested") << ":" << (b.harvested ? 1 : 0) << "," << jstr("harvesting") << ":" << (b.harvesting ? 1 : 0) << ","
           << jstr("untracked") << ":" << (b.untracked ? 1 : 0) << "," << jstr("harvest_ms") << ":" << b.harvest_ms << ","
-          << jstr("harvested_at") << ":" << b.harvested_at << "," << jstr("dirs") << ":" << b.harvest_dirs << "}";
+          << jstr("harvested_at") << ":" << b.harvested_at << "," << jstr("dirs") << ":" << b.harvest_dirs << ","
+          << jstr("verify") << ":" << verify_json((int)i) << "}";
     }
     o << "]}\n";
     write_file(g_cfg.run_dir + "/status.json", o.str());
@@ -599,6 +601,7 @@ static void usage() {
         "  --mountpoint PATH   user share mount (default /mnt/user)\n"
         "  --config FILE       settings (default /boot/config/plugins/unwake/unwake.cfg)\n"
         "  --log FILE          log file (default /var/log/unwake.log)\n"
+        "  --verify-log FILE   the verifier's log (default /var/log/unwake-verify.log)\n"
         "  --run-dir DIR       status and ready files (default /var/run/unwake)\n"
         "  --disks-ini FILE    emhttpd disks.ini\n"
         "  --var-ini FILE      emhttpd var.ini\n"
@@ -628,6 +631,7 @@ int main(int argc, char** argv) {
         if (a == "--mountpoint") g_cfg.mountpoint = keep(val());
         else if (a == "--config") g_cfg.cfg_file = keep(val());
         else if (a == "--log") g_cfg.log_file = keep(val());
+        else if (a == "--verify-log") g_cfg.verify_log = keep(val());
         else if (a == "--run-dir") g_cfg.run_dir = keep(val());
         else if (a == "--disks-ini") g_cfg.disks_ini = keep(val());
         else if (a == "--var-ini") g_cfg.var_ini = keep(val());

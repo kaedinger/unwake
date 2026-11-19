@@ -21,6 +21,7 @@
 
 <CHANGES>
 ### next
+- feat: betas check the folders in RAM against the disks while they spin, repair differences and log them to unwake-verify.log (VERIFY="yes" in stable versions)
 - fix: a folder's modification time is updated in RAM when files in it are created, deleted or renamed
 - fix: a file's access time (atime) is updated in RAM after it was read; it stayed at its old value
 - fix: a file renamed right after it was written (git's lock files) no longer leaves its old name in listings
