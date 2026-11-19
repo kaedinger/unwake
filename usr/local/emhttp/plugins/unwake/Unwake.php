@@ -446,7 +446,7 @@ var UW_INSTALLED = <?= json_encode($version) ?>;
     document.getElementById('uw-fold-caret-' + name).innerHTML = open ? '&#9662;' : '&#9656;';
     try { localStorage.setItem('unwake-fold-' + name, open ? '1' : '0'); } catch (e) {}
   };
-  ['cache', 'hits', 'shares'].forEach(function (name) {
+  ['cache', 'hits', 'verify', 'shares'].forEach(function (name) {
     try { if (localStorage.getItem('unwake-fold-' + name) === '1') uwFold(name, true); } catch (e) {}
   });
 
