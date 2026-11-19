@@ -140,12 +140,19 @@ struct DirNode {
     std::unordered_map<std::string, Entry> entries;
     Mask     known       = 0;      // branches whose slice of this dir is fully known
     bool     pt_complete = false;  // union listing complete (from shfs), kept current since
+    uint32_t dirty       = 0;      // disks with a change here since their reader cleared the bit
+                                   // (bit b % 32; it fills the padding after pt_complete: no extra RAM)
     uint64_t gen         = tree_seq();     // names came, went or moved
     uint64_t agen        = gen;            // an entry's attributes or xattrs changed
     Entry*   self_entry() const;   // this dir's entry in its parent (null for the root)
 };
-inline void touch(DirNode* d)      { d->gen = d->agen = tree_seq(); }
-inline void touch_attr(DirNode* d) { d->agen = tree_seq(); }
+// on: the disks the change was on (a change through shfs: all, its disk isn't known).
+// The harvester and the verifier read one disk's slice and look only at its bit, so a
+// download on the cache doesn't disturb reading the same folder on disk3.
+inline uint32_t dbit(int b) { return uint32_t(1) << (b % 32); }   // a disk's dirty bit
+constexpr uint32_t ALL_DISKS = ~uint32_t(0);
+inline void touch(DirNode* d, uint32_t on = ALL_DISKS)      { d->gen = d->agen = tree_seq(); d->dirty |= on; }
+inline void touch_attr(DirNode* d, uint32_t on = ALL_DISKS) { d->agen = tree_seq(); d->dirty |= on; }
 extern uint64_t g_untraced;        // changes in folders not in the tree (tree lock held)
 
 // what a reader saw before asking shfs or a disk about names in dir

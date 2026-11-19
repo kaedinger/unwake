@@ -178,7 +178,8 @@ static bool repair(int b, const std::string& rel, uint64_t gen, uint64_t agen, c
     Mask m = bit(b);
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(rel);
-    if (!d || d->gen != gen || d->agen != agen || !(d->known & m)) return false;
+    if (!d || (d->dirty & dbit(b)) || !(d->known & m)) return false;   // this disk changed here meanwhile
+    if (!g_branches[b]->harvested || g_branches[b]->harvesting) return false;   // its folders are being read again
     std::map<std::string, const Item*> items;
     for (auto& it : disk) items[it.name] = &it;
     for (auto& df : diffs) {
@@ -207,7 +208,7 @@ static bool repair(int b, const std::string& rel, uint64_t gen, uint64_t agen, c
             e.xattrs = item.xattrs;
         }
     }
-    touch(d);
+    touch(d, dbit(b));
     return true;
 }
 
@@ -299,6 +300,10 @@ static Outcome check(int b, const std::string& rel, std::vector<std::string>* su
 
     // a second look: only what is still different, unchanged, and without a change in between
     if (!pause_for(CONFIRM_MS) || !br.up) return UNSURE;
+    {
+        std::unique_lock<std::shared_mutex> l(g_tree.mu);   // a change on this disk from now on: not now
+        if (DirNode* d = tree_find(rel)) d->dirty &= ~dbit(b);
+    }
     uint64_t gen2 = 0, agen2 = 0;
     if (!snapshot(b, rel, ram, gen2, nullptr, &agen2)) return UNSURE;
     disk.clear();

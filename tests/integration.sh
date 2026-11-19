@@ -353,6 +353,16 @@ stat_json "[(b['name'], b['verify']) for b in d['branches']]" | sed 's/^/  verif
 rm -f "$T/run/test-verify-now"
 sed -i '/^VERIFY/d' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
 
+say "harvest: changes on another disk don't disturb reading a folder"
+kill "$SUP"; wait "$SUP" 2>/dev/null
+echo "400 media/shows" > "$T/run/test-slow-harvest"
+( for i in $(seq 1 120); do echo x > "$T/mnt/cache/media/shows/churn-$((i % 5))"; rm -f "$T/mnt/cache/media/shows/churn-$(((i + 2) % 5))"; sleep 0.05; done ) & W=$!
+start_unwake && wait_harvest
+wait $W; rm -f "$T/run/test-slow-harvest" "$T"/mnt/cache/media/shows/churn-*; sleep 1.5
+k=$(tree_names media/shows | head -1); echo "  known: $k"
+check "a folder busy on the cache is still read on disk1 and disk2" bash -c "echo '$k' | grep -q 'disk1 disk2'"
+check "listing equals shfs after the busy folder" same_listing
+
 say "spun-down disk is never read"
 kill "$SUP"; wait "$SUP" 2>/dev/null
 echo disk2 > "$T/run/test-spundown"

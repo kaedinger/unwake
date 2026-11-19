@@ -377,7 +377,13 @@ static int worker() {
                     {
                         std::shared_lock<std::shared_mutex> l(g_tree.mu);
                         DirNode* d = tree_find(rel);
-                        if (d) for (auto& kv : d->entries) out += kv.first + "\n";
+                        if (d) {
+                            out = "#known";
+                            for (size_t i = 0; i < g_branches.size(); i++)
+                                if (d->known & bit((int)i)) out += " " + g_branches[i]->name;
+                            out += "\n";
+                            for (auto& kv : d->entries) out += kv.first + "\n";
+                        }
                     }
                     write_file(dp + ".out", out);
                     unlink(dp.c_str());
