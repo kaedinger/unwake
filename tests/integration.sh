@@ -305,6 +305,8 @@ check "planted wrong size found" grep -q '"ep-disk1-5.mkv": size RAM' "$T/verify
 check "repaired: listing equals shfs" same_listing
 check "repaired: size as on the disk" test "$(stat -c %s "$T/mnt/user/media/shows/ep-disk1-5.mkv")" = "$(stat -c %s "$T/mnt/disk1/media/shows/ep-disk1-5.mkv")"
 check "the count on the status" test "$(stat_json "sum(b['verify']['diffs'] for b in d['branches'])")" -eq 3
+stat_json "[(b['name'], b['verify']) for b in d['branches']]" | sed 's/^/  verify status: /'
+grep -E 'verify|ep-disk2-3' "$T/unwake.log" | tail -15 | sed 's/^/  log: /'
 sed -i '/^VERIFY/d' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
 
 say "spun-down disk is never read"
