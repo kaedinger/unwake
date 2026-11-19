@@ -265,9 +265,10 @@ touch -d '2 days ago' "$T/mnt/disk1/$D"; sleep 2
 echo new > "$T/mnt/disk1/$D/dirmtime-direct"; sleep 2
 check "folder mtime after a create straight on the disk" test "$(stat -c %Y "$T/mnt/user/$D")" = "$(stat -c %Y "$T/mnt/disk1/$D")"
 echo new > "$T/mnt/user/$D/dirmtime-inband"; sleep 2
-check "folder mtime after a create through Unwake" test "$(stat -c %Y.%Z "$T/mnt/user/$D")" = "$(stat -c %Y.%Z "$T/mnt/disk1/$D")"
+# (shfs may create the new file, and the folder with it, on another disk: compare with shfs)
+check "folder mtime after a create through Unwake" test "$(stat -c %Y.%Z "$T/mnt/user/$D")" = "$(stat -c %Y.%Z "$T/ref/$D")"
 rm "$T/mnt/user/$D/dirmtime-inband" "$T/mnt/disk1/$D/dirmtime-direct"; sleep 2
-check "folder mtime after deletes" test "$(stat -c %Y.%Z "$T/mnt/user/$D")" = "$(stat -c %Y.%Z "$T/mnt/disk1/$D")"
+check "folder mtime after deletes" test "$(stat -c %Y.%Z "$T/mnt/user/$D")" = "$(stat -c %Y.%Z "$T/ref/$D")"
 # atime: a read changes it without any other event (relatime: once it's older than a day)
 F=media/shows/ep-disk1-2.mkv
 touch -a -d '3 days ago' "$T/mnt/disk1/$F"; sleep 2
