@@ -7,6 +7,13 @@
 #pragma once
 
 #define FUSE_USE_VERSION 317
+
+// Test hooks (files in the run dir that CI uses to steer a race or a failure; they only
+// work with --branch). Built into CI and beta builds; the release build of a stable
+// version sets UNWAKE_TEST_HOOKS=0 and leaves them out.
+#ifndef UNWAKE_TEST_HOOKS
+#define UNWAKE_TEST_HOOKS 1
+#endif
 #include <fuse_lowlevel.h>
 
 #include <algorithm>

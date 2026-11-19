@@ -230,8 +230,10 @@ bool handover_receive(int sock, struct fuse_session* se, HoMount& m, const std::
             tree_handover_in(r);
         }
         if (r.p != r.end) throw std::runtime_error("state longer than expected");
+#if UNWAKE_TEST_HOOKS
         if (test_mode == "refuse") throw std::runtime_error("refused (test)");
         if (test_mode == "crash") abort();
+#endif
         if (fuse_session_handover_import(se, fuse_fd, &fh) != 0) throw std::runtime_error("libfuse refused the session");
         // the fds the state didn't claim (none, normally)
     } catch (const std::exception& e) {

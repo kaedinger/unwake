@@ -36,7 +36,9 @@ jobs:
       - name: Compile unwaked
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq meson ninja-build >/dev/null
-          make build-daemon VERSION=$VER
+          # stable versions ship without the test hooks
+          case "$VER" in *-beta|*-dev) HOOKS=1 ;; *) HOOKS=0 ;; esac
+          make build-daemon VERSION=$VER TEST_HOOKS=$HOOKS
 
       - name: Build TXZ package
         run: make package VERSION=$VER

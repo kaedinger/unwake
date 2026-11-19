@@ -906,9 +906,11 @@ static void op_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
         std::string rel;
         struct stat st;
         if (path_of(ino, rel) && fstat(sfd >= 0 ? sfd : h->fd, &st) == 0) {
+#if UNWAKE_TEST_HOOKS
             // tests only: widen the window in which a rename overtakes this release
             if (!g_cfg.branch_args.empty() && access((g_cfg.run_dir + "/test-slow-release").c_str(), F_OK) == 0)
                 usleep(300 * 1000);
+#endif
             cache_update(rel, st);
         }
         node_wfd_add(ino, h->fd, false);

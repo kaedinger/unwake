@@ -15,8 +15,10 @@ LIBFUSE_PREFIX ?= $(CURDIR)/build/libfuse3
 LIBFUSE_LIBDIR := $(firstword $(wildcard $(LIBFUSE_PREFIX)/lib/x86_64-linux-gnu $(LIBFUSE_PREFIX)/lib64 $(LIBFUSE_PREFIX)/lib))
 
 CXX      := g++
+# test hooks: 0 for the release build of a stable version (release.yml)
+TEST_HOOKS ?= 1
 CXXFLAGS := -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -std=c++17 \
-            -I$(LIBFUSE_PREFIX)/include/fuse3 -DUNWAKE_VERSION='"$(VERSION)"'
+            -I$(LIBFUSE_PREFIX)/include/fuse3 -DUNWAKE_VERSION='"$(VERSION)"' -DUNWAKE_TEST_HOOKS=$(TEST_HOOKS)
 LDFLAGS  := -L$(LIBFUSE_LIBDIR) -Wl,-Bstatic -lfuse3 -Wl,-Bdynamic -lpthread -ldl
 
 SRC := $(wildcard src/*.cpp)

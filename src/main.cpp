@@ -244,7 +244,9 @@ static struct fuse_session* adopt(struct fuse_args* args, TopMount& mine, time_t
     auto se = fuse_session_new(args, fs_ops(), sizeof(struct fuse_lowlevel_ops), nullptr);
     if (!se) { log_err("fuse_session_new failed"); return nullptr; }
     std::string test;   // tests only: make the take-over fail
+#if UNWAKE_TEST_HOOKS
     if (!g_cfg.branch_args.empty()) { std::ifstream f(g_cfg.run_dir + "/test-adopt"); f >> test; }
+#endif
     HoMount m;
     if (!handover_receive(_adopt_fd, se, m, test)) { fuse_session_destroy(se); return nullptr; }
     close(_adopt_fd);

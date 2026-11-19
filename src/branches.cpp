@@ -154,9 +154,13 @@ static void spin_changed(Branch& b, bool up) {
 
 void spin_poll() {
     if (!g_cfg.branch_args.empty()) {
+#if UNWAKE_TEST_HOOKS
         std::ifstream f(g_cfg.run_dir + "/test-spundown");
         std::string all((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         auto down = split(all, '\n');
+#else
+        std::vector<std::string> down;
+#endif
         for (auto& b : g_branches) {
             bool up = std::find(down.begin(), down.end(), b->name) == down.end();
             if (up != b->up.exchange(up)) spin_changed(*b, up);
