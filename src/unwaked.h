@@ -50,7 +50,7 @@ struct Config {
     bool        debug        = false;
     std::atomic<bool> harvest{true};
     std::atomic<bool> direct_reads{true};   // DATA_PATH=direct: reads of files on one known disk skip shfs
-    std::atomic<bool> return_ram{false};    // RETURN_RAM=yes: hand freed memory back after the kernel forgot many names
+    std::atomic<bool> return_ram{true};     // RETURN_RAM=yes: hand freed memory back after the kernel forgot many names
     std::vector<std::string> excluded_explicit, included_explicit;   // EXCLUDED_SHARES, INCLUDED_SHARES
     // effective set, sorted: explicit exclusions plus shares that live on SSD pools only.
     // Replaced as a whole; readers take a snapshot (std::atomic_load)

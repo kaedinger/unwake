@@ -22,6 +22,7 @@
 <CHANGES>
 ### next
 - ui: with Return Freed RAM off, shows how much of Unwake's RAM is freed memory kept for reuse
+- feat: Return Freed RAM is on by default
 
 ### 2026.11.18.78088-beta
 - ui: Apply button back in the settings column (an empty label is hidden by Unraid 7 and shifted the grid)

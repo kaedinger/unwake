@@ -70,8 +70,10 @@ Then turn off Dynamix Cache Directories under *Settings → Folder Caching*, and
 ## Requirements
 
 - Unraid 7.3.2 or newer
-- RAM: between about 270 and 460 bytes per file and folder name, depending on how many of them the kernel currently holds (a nightly backup through `/mnt/user` touches them all). 1.4 million names: 380 to 650 MB
+- RAM: about 270 bytes per file and folder name for the tree (1.4 million names: about 380 MB), more during and after a backup - see below
 - No external dependencies - single C++ binary
+
+**RAM after a backup.** Besides the tree, Unwake keeps an entry for every name the kernel currently holds an inode for, and a backup or media scan through `/mnt/user` touches nearly all of them. When the kernel lets go of them, *Return Freed RAM* (on by default) hands the freed memory back to the system a few minutes later. With it off, Unwake keeps that memory for the next backup - a few milliseconds saved a night, but the night's peak held all day; the settings page then shows how much is kept. On my server (1.4 million names): 376 MB before the nightly backup, 864 MB the next morning with it off, 479 MB seconds after switching it on.
 
 ## Links
 

@@ -193,7 +193,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
       <?= opt('no',  $c['RETURN_RAM'], 'No') ?>
       <?= opt('yes', $c['RETURN_RAM'], 'Yes') ?>
     </select>
-    <div class="uw-help">Besides the folders, Unwake keeps an entry for every name the kernel currently holds an inode for. A backup or a media scan through /mnt/user makes that many, and the kernel lets go of them only when it needs the RAM. With Yes, Unwake hands the memory freed then back to the system (at most every 5 minutes, after at least 100,000 names). With No, it keeps it for the next backup, which needs it again. It costs a few milliseconds each time and doesn't slow anything else down. <strong>Default: No.</strong></div>
+    <div class="uw-help">Besides the folders, Unwake keeps an entry for every name the kernel currently holds an inode for. A backup or a media scan through /mnt/user makes that many, and the kernel lets go of them only when it needs the RAM. With Yes, Unwake hands the memory freed then back to the system (at most every 5 minutes, after at least 100,000 names). With No, it keeps it for the next backup, which then gets it a little faster; the status shows how much is kept. Handing it back costs a few milliseconds each time and doesn't slow anything else down. <strong>Default: Yes.</strong></div>
   </dd>
 
   <dt class="uw-has-help" onclick="uwToggleHelp(this)">Log Level</dt>

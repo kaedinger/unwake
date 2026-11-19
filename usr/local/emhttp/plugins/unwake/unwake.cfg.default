@@ -19,7 +19,7 @@ INCLUDED_SHARES=""
 
 # After the kernel lets go of many names (the backup's, hours later), hand the freed
 # RAM back to the system instead of keeping it for the next night (yes/no)
-RETURN_RAM="no"
+RETURN_RAM="yes"
 
 LOG_LEVEL="info"
 LOG_MAX_SIZE_MB="16"

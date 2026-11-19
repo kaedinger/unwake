@@ -55,6 +55,17 @@ A plugin update switches Unwake in place: the running version hands its FUSE con
 
 ---
 
+### RAM after a backup
+
+Besides the tree, Unwake keeps an entry (about 200 bytes) for every name the kernel currently holds an inode for. A backup or media scan through `/mnt/user` touches nearly every name, so during the night that's most of them. The kernel lets go of them later, or when it needs the memory, and Unwake frees those entries.
+
+What happens to that freed memory is up to *Return Freed RAM*:
+
+- **Yes** (default): Unwake hands it back to the system a few minutes later. Some of it stays: a page of memory where a few entries are still in use can't be given back.
+- **No**: Unwake keeps it for the next backup, which then doesn't have to get it from the system again. That saves a few milliseconds a night, but Unwake holds the night's peak all day. The settings page shows how much of its RAM is such kept memory.
+
+Measured on the author's server (1.4 million names): 376 MB before the nightly backup, 864 MB the next morning with *No*, 479 MB seconds after switching to *Yes*.
+
 ## Features
 
 - **Folders in RAM, for good** - listings, lookups (including of names that don't exist), attributes and extended attributes answered without touching shfs; nothing pushes them out of memory
@@ -128,7 +139,7 @@ CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XF
 | `SERVICE` | `disabled` | `enabled` puts Unwake on top of `/mnt/user` when the array starts |
 | `HARVEST` | `yes` | Read the folders of disks while they spin anyway. `no`: only folders listed through Unwake are kept |
 | `DATA_PATH` | `direct` | `direct`: a file on exactly one known disk is opened on that disk; `shfs`: all files through shfs |
-| `RETURN_RAM` | `no` | `yes`: once the kernel has let go of many names (a backup's, hours later), hand the freed RAM back to the system |
+| `RETURN_RAM` | `yes` | Once the kernel has let go of many names (a backup's, hours later), hand the freed RAM back to the system. `no`: keep it for the next backup (see *RAM after a backup*) |
 | `EXCLUDED_SHARES` | *(empty)* | Shares passed to shfs, never kept in RAM. Managed by *Shares in RAM* on the settings page |
 | `INCLUDED_SHARES` | *(empty)* | SSD-pool-only shares kept in RAM anyway |
 | `LOG_LEVEL` | `info` | `info` or `debug` |
@@ -171,7 +182,7 @@ CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XF
 ## Requirements
 
 - Unraid 7.3.2 or newer
-- RAM: about 270 bytes per file and folder name for the tree, plus about 200 bytes for each name the kernel currently holds an inode for. A backup or media scan through `/mnt/user` makes that most of them, and the kernel lets go only when it needs the memory. So, between about 270 and 460 bytes per name: 1.4 million names take 380 to 650 MB (measured: 376 MB before the nightly backup, 644 MB after). *Return Freed RAM* gives the second part back once the kernel lets go
+- RAM: about 270 bytes per file and folder name for the tree (1.4 million names: about 380 MB), more during and after a backup - see *RAM after a backup*
 - Linux 6.9+ for kernel passthrough (without it, file data goes through the daemon)
 - No external dependencies
 
