@@ -41,7 +41,7 @@ Unwake runs `unwaked`, a FUSE daemon that sits **on top of** `/mnt/user` - shfs 
 
 ### File data and kernel passthrough
 
-Unwake isn't in the way of file data: with Linux 6.9+ (Unraid 7.3.2 has 6.18), it hands every opened file to the kernel (**FUSE passthrough**), which then reads and writes it directly - no copy through the daemon, no extra page cache. A file that lives on exactly one known disk is opened on that disk, skipping shfs (*File data: direct*).
+Unwake isn't in the way of file data: with Linux 6.9+ (Unraid 7.2 has 6.12, 7.3.2 has 6.18), it hands every opened file to the kernel (**FUSE passthrough**), which then reads and writes it directly - no copy through the daemon, no extra page cache. A file that lives on exactly one known disk is opened on that disk, skipping shfs (*File data: direct*).
 
 The kernel takes **one backing file per file**, shared by everything that has the file open. Unwake therefore opens that backing file **for reading and writing**, even when the first program only reads it - otherwise a program that wants to write the file while another one reads it (qBittorrent finishing a download that Plex is scanning, Word saving a document that Explorer's preview holds open) would be refused. What that means:
 
@@ -181,7 +181,7 @@ CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XF
 
 ## Requirements
 
-- Unraid 7.3.2 or newer
+- Unraid 7.2.0 or newer (tested with 7.3.2)
 - RAM: about 270 bytes per file and folder name for the tree (1.4 million names: about 380 MB), more during and after a backup - see *RAM after a backup*
 - Linux 6.9+ for kernel passthrough (without it, file data goes through the daemon)
 - No external dependencies

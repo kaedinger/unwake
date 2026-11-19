@@ -15,7 +15,7 @@
   launch="&launch;"
   pluginURL="&pluginURL;"
   icon="moon-o"
-  min="7.3.2"
+  min="7.2.0"
   description="Keeps the directory trees of your user shares in RAM, so folder listings, name lookups and attribute reads don't wake sleeping disks - not even after a backup or a big copy pushed everything else out of memory. Replaces Dynamix Cache Directories. Configurable under Utilities."
 >
 
@@ -23,6 +23,7 @@
 ### next
 - ui: with Return Freed RAM off, shows how much of Unwake's RAM is freed memory kept for reuse
 - feat: Return Freed RAM is on by default
+- feat: installs on Unraid 7.2.0 and newer
 
 ### 2026.11.18.78088-beta
 - ui: Apply button back in the settings column (an empty label is hidden by Unraid 7 and shifted the grid)
