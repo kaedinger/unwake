@@ -259,7 +259,8 @@ stage rc2 sub/f
 echo 2000 > "$T/run/test-slow-lookup"
 stat "$T/mnt/user/$R/rc2/sub/f" >/dev/null 2>&1 & P=$!
 sleep 0.5; mv "$T/mnt/disk1/$R/rc2" "$T/mnt/disk1/$R/rc2x"; wait $P; rm -f "$T/run/test-slow-lookup"; sleep 1.5
-check "no ghost folder after a rename above a lookup" bash -c "! ls '$T/mnt/user/$R' | grep -qx rc2"
+# (the kernel lists with attributes after lookups, then without: a ghost shows in the second)
+check "no ghost folder after a rename above a lookup" bash -c "! { ls '$T/mnt/user/$R'; ls '$T/mnt/user/$R'; ls '$T/mnt/user/$R'; } | grep -qx rc2"
 check "the old path is gone" bash -c "! stat '$T/mnt/user/$R/rc2/sub/f' >/dev/null 2>&1"
 check "the renamed folder is there" test -e "$T/mnt/user/$R/rc2x/sub/f"
 # 3: a delete through Unwake while the same name comes back straight on the disk
