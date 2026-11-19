@@ -20,6 +20,9 @@
 >
 
 <CHANGES>
+### next
+- fix: a file renamed right after it was written (git's lock files) no longer leaves its old name in listings
+
 ### 2026.11.19.38525-beta
 - ui: with Return Freed RAM off, shows how much of Unwake's RAM is freed memory kept for reuse
 - feat: Return Freed RAM is on by default

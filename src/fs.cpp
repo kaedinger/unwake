@@ -425,6 +425,26 @@ static void cache_put(const std::string& rel, const struct stat& st, uint64_t ge
     d->gen++;
 }
 
+// New attributes of a name the tree has (after a write, chmod, truncate, ...). Never adds
+// the name: a rename or unlink may have raced with the caller (FUSE sends RELEASE after
+// close() returned, so a program can rename the file before we see it), and adding the
+// old name back would leave a ghost that listings show and opens can't find.
+static void cache_update(const std::string& rel, const struct stat& st) {
+    if (rel.empty() || !caching_for(rel)) return;
+    std::unique_lock<std::shared_mutex> l(g_tree.mu);
+    DirNode* d = tree_find(dir_of(rel));
+    if (!d) return;
+    auto it = d->entries.find(base_of(rel));
+    if (it == d->entries.end()) return;
+    Entry& e = it->second;
+    e.attr.from(st);
+    e.has_attr = true;
+    e.attr_from = -1;
+    e.is_dir = S_ISDIR(st.st_mode);
+    e.dtype = (uint8_t)IFTODT(st.st_mode);
+    d->gen++;
+}
+
 // Our own change through shfs removed a name.
 static void cache_removed(const std::string& rel) {
     if (rel.empty()) return;
@@ -644,7 +664,7 @@ static void op_setattr(fuse_req_t req, fuse_ino_t ino, struct stat* attr, int to
     struct stat st;
     if ((fd >= 0 ? fstat(fd, &st) : fstatat(g_shfs_fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW)) != 0)
         return (void)fuse_reply_err(req, errno);
-    if (!rel.empty()) cache_put(rel, st, cache_gen(dir_of(rel)));
+    cache_update(rel, st);
     st.st_ino = ino;
     fuse_reply_attr(req, &st, ATTR_TIMEOUT);
 }
@@ -711,7 +731,7 @@ static void op_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const 
     struct stat st;
     if (fstatat(g_shfs_fd, nrel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) return (void)fuse_reply_err(req, errno);
     cache_put(nrel, st, cache_gen(prel));
-    cache_put(rel, st, cache_gen(dir_of(rel)));      // nlink changed
+    cache_update(rel, st);                           // nlink changed
     // FUSE wants the existing inode back; the new name gets its own node on its next lookup
     {
         std::lock_guard<std::mutex> l(_nmu);
@@ -823,7 +843,11 @@ static void op_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi) {
     if (fd < 0) {
         note_shfs((flags & O_ACCMODE) == O_RDONLY && !(flags & O_TRUNC) ? "open" : "open (write)", rel);
         fd = openat(g_shfs_fd, rel.c_str(), flags);
-        if (fd < 0) return fail(req, "open", rel, errno);
+        if (fd < 0) {
+            int e = errno;
+            if (e == ENOENT) cache_removed(rel);    // shfs has it nowhere: the tree was wrong
+            return fail(req, "open", rel, e);
+        }
         g_stats.open_shfs++;
     } else note_shfs("open (direct)", rel, {}, {}, bit(b));
     opened(req, ino, fi, fd, false, nullptr);
@@ -881,7 +905,7 @@ static void op_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
         int sfd = node_wfd(ino);   // the backing file if any: what was written is there
         std::string rel;
         struct stat st;
-        if (path_of(ino, rel) && fstat(sfd >= 0 ? sfd : h->fd, &st) == 0) cache_put(rel, st, cache_gen(dir_of(rel)));
+        if (path_of(ino, rel) && fstat(sfd >= 0 ? sfd : h->fd, &st) == 0) cache_update(rel, st);
         node_wfd_add(ino, h->fd, false);
     }
     if (h->backing_id) node_backing_put(req, ino);
