@@ -35,7 +35,7 @@ jobs:
 
       - name: Compile unwaked
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq meson ninja-build >/dev/null
+          sudo apt-get -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::Retries=5 install -y -qq meson ninja-build >/dev/null
           # stable versions ship without the test hooks
           case "$VER" in *-beta|*-dev) HOOKS=1 ;; *) HOOKS=0 ;; esac
           make build-daemon VERSION=$VER TEST_HOOKS=$HOOKS
