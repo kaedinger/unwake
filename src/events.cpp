@@ -45,8 +45,11 @@ static void events_broken(const std::string& why) {
 static std::map<std::string, Mark> _marks;          // mount path -> mark
 static std::mutex _marks_mu;
 
+// FAN_CLOSE_NOWRITE: a read changes a file's atime without any other event (relatime: at
+// most once a day per file); re-reading the file after it was closed keeps atime current.
+// Merged events (several closes in one) are fine: only the latest atime matters.
 static constexpr uint64_t EVENTS = FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO |
-                                   FAN_ATTRIB | FAN_MODIFY | FAN_ONDIR;
+                                   FAN_ATTRIB | FAN_MODIFY | FAN_CLOSE_NOWRITE | FAN_ONDIR;
 
 // Every mount point at or below a branch root, from mountinfo (no disk I/O).
 static std::vector<Mark> wanted_marks() {
@@ -149,13 +152,14 @@ static void drop_subtree(Entry& e) {
     e.dir.reset();
 }
 
-struct Pending { int b; std::string dir, name; };
+struct Pending { int b; std::string dir, name; bool xattrs; };   // xattrs: may have changed too
 static std::map<std::string, Pending> _pending;
 static int64_t _pending_since = 0;
 
-static void restat_later(int b, const std::string& dir, const std::string& name) {
+static void restat_later(int b, const std::string& dir, const std::string& name, bool xattrs = true) {
     if (_pending.empty()) _pending_since = now_ms();
-    _pending[std::to_string(b) + ":" + dir + "/" + name] = {b, dir, name};
+    auto r = _pending.try_emplace(std::to_string(b) + ":" + dir + "/" + name, Pending{b, dir, name, xattrs});
+    if (!r.second) r.first->second.xattrs |= xattrs;
 }
 
 static void apply_added(int b, const std::string& rel_dir, const std::string& name,
@@ -231,7 +235,9 @@ static void flush_pending() {
         std::string abs = g_branches[p.b]->root + (p.dir.empty() ? "" : "/" + p.dir) + "/" + p.name;
         struct stat st;
         if (lstat(abs.c_str(), &st) != 0) continue;    // gone: a delete event follows
-        auto xs = read_xattrs(abs);                     // the disk is up: it just changed
+        // the disk is up: it was just used. After a read only atime changed: xattrs as they are
+        std::shared_ptr<const Xattrs> xs;
+        if (p.xattrs) xs = read_xattrs(abs);
         std::unique_lock<std::shared_mutex> l(g_tree.mu);
         DirNode* d = tree_find(p.dir);
         if (!d) continue;
@@ -242,7 +248,7 @@ static void flush_pending() {
         e.attr.from(st);
         e.has_attr = true;
         e.attr_from = (int8_t)p.b;
-        e.xattrs = xs;
+        if (p.xattrs) e.xattrs = xs;
         d->gen++;
     }
 }
@@ -330,6 +336,7 @@ static void handle(const struct fanotify_event_metadata* ev, std::map<std::strin
             apply_removed(b, rel, name, ev->mask & FAN_MOVED_FROM);
     }
     if (ev->mask & (FAN_ATTRIB | FAN_MODIFY)) restat_later(b, rel, name);
+    else if (ev->mask & FAN_CLOSE_NOWRITE) restat_later(b, rel, name, false);   // read: atime
     close(dfd);
     if (g_debug) log_debug("event " + std::string(abs) + "/" + name + " mask 0x" +
                            [&] { char x[20]; snprintf(x, sizeof x, "%llx", (unsigned long long)ev->mask); return std::string(x); }());
@@ -451,6 +458,6 @@ void events_handover_in(HoReader& r) {
         int b = (int)r.u32();
         auto dir = r.str();
         auto name = r.str();
-        if (b >= 0 && (size_t)b < g_branches.size()) restat_later(b, dir, name);
+        if (b >= 0 && (size_t)b < g_branches.size()) restat_later(b, dir, name);   // xattrs too: not handed over
     }
 }

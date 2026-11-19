@@ -258,6 +258,15 @@ check "folder mode changed straight on the disk shows up" test "$(stat -c %a "$T
 check "harvested xattr value" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = archive
 setfattr -n user.DOSATTRIB -v changed "$T/mnt/disk1/media/shows/ep-disk1-1.mkv"; sleep 2
 check "xattr changed straight on the disk shows up" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = changed
+# atime: a read changes it without any other event (relatime: once it's older than a day)
+F=media/shows/ep-disk1-2.mkv
+touch -a -d '3 days ago' "$T/mnt/disk1/$F"; sleep 2
+a0=$(stat -c %X "$T/mnt/disk1/$F")
+check "old atime from RAM" test "$(stat -c %X "$T/mnt/user/$F")" = "$a0"
+for _ in 1 2 3 4 5; do cat "$T/mnt/user/$F" >/dev/null; done    # several closes, merged or not
+sleep 2
+check "a read updated the atime on the disk" test "$(stat -c %X "$T/mnt/disk1/$F")" -gt "$a0"
+check "the new atime from RAM, as on the disk" test "$(stat -c %X "$T/mnt/user/$F")" = "$(stat -c %X "$T/mnt/disk1/$F")"
 # all disks read: a pool-only share passed to shfs is known not to be on disk2
 echo disk2 > "$T/run/test-spundown"; sleep 2.5
 n0=$(grep -c 'disk2 spun up' "$T/unwake.log")
