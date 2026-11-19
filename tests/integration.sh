@@ -259,6 +259,15 @@ check "folder mode changed straight on the disk shows up" test "$(stat -c %a "$T
 check "harvested xattr value" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = archive
 setfattr -n user.DOSATTRIB -v changed "$T/mnt/disk1/media/shows/ep-disk1-1.mkv"; sleep 2
 check "xattr changed straight on the disk shows up" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = changed
+# a folder's mtime changes with its contents, without an event of its own
+D=media/movies/disk1-only
+touch -d '2 days ago' "$T/mnt/disk1/$D"; sleep 2
+echo new > "$T/mnt/disk1/$D/dirmtime-direct"; sleep 2
+check "folder mtime after a create straight on the disk" test "$(stat -c %Y "$T/mnt/user/$D")" = "$(stat -c %Y "$T/mnt/disk1/$D")"
+echo new > "$T/mnt/user/$D/dirmtime-inband"; sleep 2
+check "folder mtime after a create through Unwake" test "$(stat -c %Y.%Z "$T/mnt/user/$D")" = "$(stat -c %Y.%Z "$T/mnt/disk1/$D")"
+rm "$T/mnt/user/$D/dirmtime-inband" "$T/mnt/disk1/$D/dirmtime-direct"; sleep 2
+check "folder mtime after deletes" test "$(stat -c %Y.%Z "$T/mnt/user/$D")" = "$(stat -c %Y.%Z "$T/mnt/disk1/$D")"
 # atime: a read changes it without any other event (relatime: once it's older than a day)
 F=media/shows/ep-disk1-2.mkv
 touch -a -d '3 days ago' "$T/mnt/disk1/$F"; sleep 2
