@@ -218,7 +218,7 @@ static void apply_removed(int b, const std::string& rel_dir, const std::string& 
         return;
     }
     bool sure = tree_all_known(d);
-    tree_erase(d, name);
+    tree_erase(d, name, dbit(b));
     if (!sure) {                                      // maybe still elsewhere: ask shfs next time
         d->pt_complete = false;
         log_debug("not sure " + name + " is gone from every disk - " + (rel_dir.empty() ? "/" : rel_dir) + " is listed by shfs next time");

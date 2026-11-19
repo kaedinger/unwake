@@ -374,7 +374,7 @@ static void walk(int b) {
         std::vector<std::string> subdirs;
         {
             std::unique_lock<std::shared_mutex> l(g_tree.mu);
-            DirNode* d = rel.empty() ? &g_tree.root : tree_ensure(rel, m);
+            DirNode* d = rel.empty() ? &g_tree.root : tree_ensure(rel, m, dbit(b));
             known = d->known & m;
             d->dirty &= ~dbit(b);   // a change on this disk from now on means: read again
             if (known) {
@@ -428,7 +428,7 @@ static void walk(int b) {
                 Entry& e = d->entries[n];
                 e.mask &= ~m;
                 if (!e.mask) {                      // a change we never saw
-                    tree_erase(d, n);
+                    tree_erase(d, n, dbit(b));
                     d->pt_complete = false;
                 }
             }

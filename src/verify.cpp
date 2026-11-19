@@ -187,7 +187,7 @@ static bool repair(int b, const std::string& rel, uint64_t gen, uint64_t agen, c
             auto it = d->entries.find(df.name);
             if (it == d->entries.end()) continue;
             it->second.mask &= ~m;
-            if (!it->second.mask) tree_erase(d, df.name);
+            if (!it->second.mask) tree_erase(d, df.name, dbit(b));
             else if (it->second.dir) clear_known(it->second.dir.get(), m);
             continue;
         }

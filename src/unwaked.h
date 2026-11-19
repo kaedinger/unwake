@@ -176,14 +176,15 @@ extern Tree g_tree;
 
 std::vector<std::string> split_path(const std::string& rel);
 DirNode* tree_find(const std::string& rel);                      // lock held
-DirNode* tree_ensure(const std::string& rel, Mask present);      // lock held (exclusive)
+// on (here and in tree_erase): the disks the change is on, for DirNode::dirty
+DirNode* tree_ensure(const std::string& rel, Mask present, uint32_t on = ALL_DISKS);   // lock held (exclusive)
 // the xattrs of a path (no symlinks followed); null if unreadable or bigger than
 // what's worth keeping. "none" is one shared empty set, so it costs no memory.
 std::shared_ptr<const Xattrs> read_xattrs(const std::string& path, int* err = nullptr);
 bool     tree_servable(const DirNode* d);                        // lock held
 bool     tree_all_known(const DirNode* d);                       // every branch slice known
 bool     tree_cacheable(const std::string& rel);                 // excluded shares
-void     tree_erase(DirNode* d, const std::string& name);        // lock held (exclusive)
+void     tree_erase(DirNode* d, const std::string& name, uint32_t on = ALL_DISKS);   // lock held (exclusive)
 void     tree_count_add(const Entry& e, int sign);
 void     tree_clear_branch(int b);                                // lock held (exclusive)
 void     tree_clear_all();                                        // lock held (exclusive)

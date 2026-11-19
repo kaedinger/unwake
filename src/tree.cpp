@@ -158,7 +158,7 @@ static DirNode* attach_dir(DirNode* parent, std::unordered_map<std::string, Entr
     return it->second.dir.get();
 }
 
-DirNode* tree_ensure(const std::string& rel, Mask present) {
+DirNode* tree_ensure(const std::string& rel, Mask present, uint32_t on) {
     DirNode* d = &g_tree.root;
     for (auto& c : split_path(rel)) {
         auto it = d->entries.find(c);
@@ -167,10 +167,10 @@ DirNode* tree_ensure(const std::string& rel, Mask present) {
             it->second.is_dir = true;
             it->second.dtype  = DT_DIR;
             g_tree.entries++;
-            touch(d);
+            touch(d, on);
         }
         Entry& e = it->second;
-        if ((e.mask & present) != present) { e.mask |= present; touch(d); }
+        if ((e.mask & present) != present) { e.mask |= present; touch(d, on); }
         if (!e.dir) attach_dir(d, it);
         d = e.dir.get();
     }
@@ -215,12 +215,12 @@ bool tree_cacheable(const std::string& rel) {
     return true;
 }
 
-void tree_erase(DirNode* d, const std::string& name) {
+void tree_erase(DirNode* d, const std::string& name, uint32_t on) {
     auto it = d->entries.find(name);
     if (it == d->entries.end()) return;
     tree_count_add(it->second, -1);
     d->entries.erase(it);
-    touch(d);
+    touch(d, on);
 }
 
 static void clear_branch_rec(DirNode* d, Mask b) {
