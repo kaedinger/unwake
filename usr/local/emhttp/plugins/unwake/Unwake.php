@@ -155,6 +155,13 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
     <div id="uw-disks"><?= $view['disks'] ?: '<span class="uw-muted">-</span>' ?></div>
     <div class="uw-help">Detected from Unraid's disk assignments: every array disk and pool that is part of the user shares. The dot shows whether a disk is spinning (green) or spun down. Unwake reads a disk's folders only while it spins anyway, at idle I/O priority, and never wakes one to do so. After that, it follows every change as it happens and doesn't read the folders again.</div>
   </dd>
+
+  <dt class="uw-has-help uw-verify-row" onclick="uwToggleHelp(this)"<?= $view['verify'] ? '' : ' style="display:none;"' ?>>Verify</dt>
+  <dd class="uw-verify-row"<?= $view['verify'] ? '' : ' style="display:none;"' ?>>
+    <div class="uw-fold-line" onclick="uwFold('verify')"><span id="uw-fold-caret-verify">&#9656;</span> <span id="uw-verify-line"><?= htmlspecialchars($view['verify'] ?: '-') ?></span></div>
+    <div class="uw-fold-verify" style="display:none;" id="uw-verify-detail"><?= $view['verify_detail'] ?></div>
+    <div class="uw-help">Betas check the folders in RAM against the disks: a few folders per second, only while a disk spins anyway, a full pass at most every 12 hours. A difference counts only if a second look 5 seconds later shows the same. It is repaired in RAM and written to <code>/var/log/unwake-verify.log</code>, with what Unwake passed to shfs for that folder before. Stable versions verify with <code>VERIFY="yes"</code> in <code>unwake.cfg</code>.</div>
+  </dd>
 </dl>
 
 <hr>
@@ -393,6 +400,9 @@ var UW_INSTALLED = <?= json_encode($version) ?>;
     document.getElementById('uw-hits-line').textContent = v.hits || '-';
     document.getElementById('uw-hits-detail').innerHTML = v.hits_detail;
     document.getElementById('uw-disks').innerHTML = v.disks || '<span class="uw-muted">-</span>';
+    document.querySelectorAll('.uw-verify-row').forEach(function (el) { el.style.display = v.verify ? '' : 'none'; });
+    document.getElementById('uw-verify-line').textContent = v.verify || '-';
+    document.getElementById('uw-verify-detail').innerHTML = v.verify_detail || '';
     document.querySelectorAll('.uw-pool-only').forEach(function (el) {
       var t = v.pool_only && v.pool_only[el.dataset.share];
       el.textContent = t || 'SSD pool only - checked against the array disks while Unwake runs';

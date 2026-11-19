@@ -20,6 +20,11 @@
 >
 
 <CHANGES>
+### next
+- ui: the verifier has its own section, showing the current pass per disk: waiting, verifying or verified, with the differences found and repaired
+- fix: the verifier starts a new pass at most 12 hours after the last one ended
+- fix: a repair that has to wait because the folder changed is retried a minute later until it succeeds
+
 ### 2026.11.19.51433-beta
 - feat: betas check the folders in RAM against the disks while they spin, repair differences and log them to unwake-verify.log (VERIFY="yes" in stable versions)
 - fix: a folder's modification time is updated in RAM when files in it are created, deleted or renamed

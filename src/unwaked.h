@@ -67,6 +67,7 @@ struct Config {
     std::string verify_log   = "/var/log/unwake-verify.log";
     std::atomic<bool> verify{false};        // VERIFY=yes (a beta build verifies anyway)
     std::atomic<long> verify_rate{4};       // VERIFY_RATE: folders per second and disk
+    std::atomic<long> verify_interval{43200};   // VERIFY_INTERVAL: seconds from the end of a pass to the next
     long        log_max_mb   = 16;
     long        log_trim_mb  = 2;
 };
@@ -195,7 +196,7 @@ std::string pool_only_json();            // {"share": {"known": 0|1, "on": ["dis
 void  verify_start();
 void  verify_stop();
 bool  verify_on();                       // VERIFY=yes, or a beta build
-std::string verify_json(int b);          // {"checked":..,"total":..,"diffs":..,"passes":..}
+std::string verify_json(int b);          // {"state":"waiting|running|done","checked","total","found","repaired","pending","done_at"}
 
 // ---------------------------------------------------------------------------
 // fanotify (events.cpp)

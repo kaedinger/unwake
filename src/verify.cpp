@@ -29,9 +29,13 @@
 static constexpr int64_t CONFIRM_MS = 5000;           // second look after a difference
 static constexpr off_t   LOG_MAX = 4 << 20, LOG_KEEP = 1 << 20;
 
+// per disk, the current pass only (or the last one, until the next starts)
+enum { V_WAITING = 0, V_RUNNING = 1, V_DONE = 2 };
 struct VState {
-    std::atomic<uint64_t> checked{0}, total{0}, diffs{0}, passes{0};
-    std::atomic<bool>     active{false};
+    std::atomic<int>      state{V_WAITING};
+    std::atomic<uint64_t> checked{0}, total{0};
+    std::atomic<uint64_t> found{0}, repaired{0}, pending{0};   // differences; pending: repair retried
+    std::atomic<int64_t>  done_at{0};                           // the pass ended (epoch s)
 };
 static std::unique_ptr<VState[]> _st;
 static size_t _nst = 0;
@@ -46,8 +50,10 @@ std::string verify_json(int b) {
     if (b < 0 || (size_t)b >= _nst) return "{}";
     auto& s = _st[b];
     std::ostringstream o;
-    o << "{\"active\":" << (s.active ? 1 : 0) << ",\"checked\":" << s.checked << ",\"total\":" << s.total
-      << ",\"diffs\":" << s.diffs << ",\"passes\":" << s.passes << "}";
+    static const char* names[] = {"waiting", "running", "done"};
+    o << "{\"state\":\"" << names[s.state] << "\",\"checked\":" << s.checked << ",\"total\":" << s.total
+      << ",\"found\":" << s.found << ",\"repaired\":" << s.repaired << ",\"pending\":" << s.pending
+      << ",\"done_at\":" << s.done_at << "}";
     return o.str();
 }
 
@@ -253,34 +259,36 @@ static bool pause_for(int64_t ms) {
     return !_stop;
 }
 
-static void check(int b, const std::string& rel, std::vector<std::string>& subdirs) {
+// NONE: no difference; UNSURE: differences that didn't hold still for a second look;
+// REPAIRED / FAILED: n confirmed differences, repaired or not (the folder changed meanwhile)
+enum Outcome { NONE, UNSURE, REPAIRED, FAILED };
+
+static Outcome check(int b, const std::string& rel, std::vector<std::string>* subdirs, uint64_t& n, bool retry) {
     Branch& br = *g_branches[b];
     std::map<std::string, InRam> ram;
     uint64_t gen = 0;
-    if (!snapshot(b, rel, ram, gen, &subdirs)) return;
+    n = 0;
+    if (!snapshot(b, rel, ram, gen, subdirs)) return NONE;
     std::string abs = br.root + (rel.empty() ? "" : "/" + rel);
     std::vector<Item> disk;
-    if (!read_slice(abs, disk)) return;           // gone meanwhile: its own events say so
+    if (!read_slice(abs, disk)) return NONE;      // gone meanwhile: its own events say so
     auto first = compare(ram, disk);
-    if (first.empty()) return;
+    if (first.empty()) return NONE;
 
     // a second look: only what is still different, unchanged, and without a change in between
-    if (!pause_for(CONFIRM_MS) || !br.up) return;
+    if (!pause_for(CONFIRM_MS) || !br.up) return UNSURE;
     uint64_t gen2 = 0;
-    if (!snapshot(b, rel, ram, gen2, nullptr)) return;
+    if (!snapshot(b, rel, ram, gen2, nullptr)) return UNSURE;
     disk.clear();
-    if (!read_slice(abs, disk)) return;
+    if (!read_slice(abs, disk)) return UNSURE;
     auto second = compare(ram, disk);
     std::set<std::pair<std::string, std::string>> was;
     for (auto& d : first) was.insert({d.name, d.what});
     std::vector<Diff> sure;
     for (auto& d : second) if (was.count({d.name, d.what})) sure.push_back(d);
-    if (sure.empty()) return;
-    if (!repair(b, rel, gen2, sure, disk)) {
-        log_debug("verify " + br.name + ": " + (rel.empty() ? "/" : rel) + " changed while checked, next pass");
-        return;
-    }
-    _st[b].diffs += sure.size();
+    if (sure.empty()) return UNSURE;
+    n = sure.size();
+    bool ok = repair(b, rel, gen2, sure, disk);
     std::string where = br.name + " " + (rel.empty() ? "/" : rel);
     std::string text;
     for (auto& d : sure) text += "\n    \"" + d.name + "\": " + d.what;
@@ -289,8 +297,10 @@ static void check(int b, const std::string& rel, std::vector<std::string>& subdi
         text += "\n    last requests Unwake passed to shfs in this folder:";
         for (auto& r : reqs) text += "\n      " + r;
     }
-    vlog(where + ": " + std::to_string(sure.size()) + " difference(s), repaired" + text);
-    log_warn("Verifier: " + std::to_string(sure.size()) + " difference(s) in " + where + " repaired - see " + g_cfg.verify_log);
+    std::string state = ok ? "repaired" : "not repaired yet (the folder changed meanwhile), retried in a minute";
+    vlog(where + ": " + std::to_string(n) + " difference(s)" + (retry ? " (retry)" : "") + ", " + state + text);
+    if (ok) log_warn("Verifier: " + std::to_string(n) + " difference(s) in " + where + " repaired - see " + g_cfg.verify_log);
+    return ok ? REPAIRED : FAILED;
 }
 
 static void verify_thread(int b) {
@@ -300,6 +310,8 @@ static void verify_thread(int b) {
     VState& s = _st[b];
     std::vector<std::string> stack;
     bool in_pass = false;
+    struct Retry { std::string rel; int64_t due; uint64_t n; };
+    std::vector<Retry> retries;             // confirmed differences whose repair has to wait
     while (!_stop) {
         long rate = std::max(1L, g_cfg.verify_rate.load());
         if (!pause_for(std::max<int64_t>(1, 1000 / rate))) break;
@@ -307,26 +319,61 @@ static void verify_thread(int b) {
         test_plant();
 #endif
         bool can = verify_on() && g_caching && br.up && br.harvested && !br.untracked && g_cfg.harvest;
-        s.active = can;
-        if (!can) continue;
-        if (stack.empty()) {
-            if (in_pass) s.passes++;
-            stack.push_back("");
+        if (!can) {
+            if (in_pass || !s.done_at) s.state = V_WAITING;
+            continue;
+        }
+        // repairs that had to wait, a minute later, until they succeed
+        int64_t now = now_ms();
+        auto r = std::find_if(retries.begin(), retries.end(), [&](const Retry& x) { return x.due <= now; });
+        if (r != retries.end()) {
+            uint64_t n = 0;
+            Outcome o = check(b, r->rel, nullptr, n, true);
+            if (o == FAILED || o == UNSURE) r->due = now_ms() + 60000;
+            else {                          // repaired now, or right by itself meanwhile
+                s.repaired += r->n;
+                s.pending -= r->n;
+                retries.erase(r);
+            }
+            continue;
+        }
+        if (!in_pass) {
+            bool now_please = false;
+#if UNWAKE_TEST_HOOKS
+            // tests only: <run_dir>/test-verify-now newer than the last pass starts the next one
+            struct stat t;
+            if (!g_cfg.branch_args.empty() && stat((g_cfg.run_dir + "/test-verify-now").c_str(), &t) == 0 &&
+                t.st_mtime > s.done_at)
+                now_please = true;
+#endif
+            if (s.done_at && time(nullptr) < s.done_at + g_cfg.verify_interval && !now_please) { s.state = V_DONE; continue; }
+            stack.assign(1, "");
             s.checked = 0;
             s.total = br.harvest_dirs.load();
+            s.found = s.pending.load();     // still being repaired from the last pass
+            s.repaired = 0;
             in_pass = true;
         }
+        s.state = V_RUNNING;
         auto rel = stack.back();
         stack.pop_back();
-        if (!tree_cacheable(rel)) continue;
-        std::vector<std::string> subdirs;
-        check(b, rel, subdirs);
-        s.checked++;
-        if (s.checked > s.total) s.total = s.checked.load();
-        std::sort(subdirs.rbegin(), subdirs.rend());
-        for (auto& d : subdirs) stack.push_back(std::move(d));
+        if (tree_cacheable(rel)) {
+            std::vector<std::string> subdirs;
+            uint64_t n = 0;
+            Outcome o = check(b, rel, &subdirs, n, false);
+            if (o == REPAIRED) { s.found += n; s.repaired += n; }
+            else if (o == FAILED) { s.found += n; s.pending += n; retries.push_back({rel, now_ms() + 60000, n}); }
+            s.checked++;
+            if (s.checked > s.total) s.total = s.checked.load();
+            std::sort(subdirs.rbegin(), subdirs.rend());
+            for (auto& d : subdirs) stack.push_back(std::move(d));
+        }
+        if (stack.empty()) {
+            in_pass = false;
+            s.done_at = time(nullptr);
+            s.state = V_DONE;
+        }
     }
-    s.active = false;
 }
 
 void verify_start() {
@@ -336,6 +383,7 @@ void verify_start() {
         _st.reset(new VState[_nst]);
     }
     _stop = false;
+    for (size_t i = 0; i < _nst; i++) { _st[i].state = V_WAITING; _st[i].done_at = 0; _st[i].pending = 0; }
     for (size_t i = 0; i < g_branches.size() && i < (size_t)MAX_BRANCHES; i++) _threads.emplace_back(verify_thread, (int)i);
 }
 

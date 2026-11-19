@@ -166,6 +166,9 @@ std::vector<std::string> load_config() {
         long r = 4;
         number("VERIFY_RATE", r, 1);
         g_cfg.verify_rate = r;
+        long iv = 43200;
+        number("VERIFY_INTERVAL", iv, 0);
+        g_cfg.verify_interval = iv;
     }
     if (kv.count("DATA_PATH")) {
         if (kv["DATA_PATH"] == "direct") g_cfg.direct_reads = true;

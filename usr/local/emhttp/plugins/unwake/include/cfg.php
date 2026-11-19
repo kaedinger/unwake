@@ -229,21 +229,41 @@ function status_view($st) {
         $cards .= '<div class="uw-disk-row"><span class="uw-disk-name">' . spin_mark(!empty($b['up']), $ssd) . ' ' .
                   htmlspecialchars($b['name']) . '</span><span class="uw-muted">' . $state . '</span></div>';
     }
-    // the verifier (always on in betas): one line per disk
+    $v['disks'] = $cards;
+
+    // the verifier (always on in betas): its own section, one line per disk, the current pass only
+    $v['verify'] = '';
+    $v['verify_detail'] = '';
     if (!empty($st['verifying'])) {
+        $diffs = function ($f, $r, $p) {
+            if (!$f) return '0 differences';
+            $n = number_format($f) . ' difference' . ($f == 1 ? '' : 's');
+            if ($p) return "$n, repairing";
+            return $r >= $f ? "$n repaired" : "$n, " . number_format($r) . ' repaired';
+        };
+        $busy = false; $f = $r = $p = 0;
         foreach ($st['branches'] ?? [] as $b) {
             $vf = $b['verify'] ?? [];
-            if (empty($b['harvested'])) continue;
-            $d = (int)($vf['diffs'] ?? 0);
-            $line = (!empty($vf['active']) ? 'Verifying ' : 'Verified ') . htmlspecialchars($b['name']) . ': ' .
-                    fmt_count($vf['checked'] ?? 0) . ' of ' . fmt_count($vf['total'] ?? 0) . ' folders checked' .
-                    (!empty($vf['passes']) ? ' (pass ' . ((int)$vf['passes'] + 1) . ')' : '') . ', ' .
-                    ($d ? '<span class="red-text">' . number_format($d) . ' difference' . ($d == 1 ? '' : 's') . '</span>'
-                        : '0 differences');
-            $cards .= '<div class="uw-disk-row"><span class="uw-muted">' . $line . '</span></div>';
+            $state = $vf['state'] ?? 'waiting';
+            $name = htmlspecialchars($b['name']);
+            $c = (int)($vf['checked'] ?? 0); $t = (int)($vf['total'] ?? 0);
+            $bf = (int)($vf['found'] ?? 0); $br = (int)($vf['repaired'] ?? 0); $bp = (int)($vf['pending'] ?? 0);
+            $f += $bf; $r += $br; $p += $bp;
+            $d = $diffs($bf, $br, $bp);
+            if ($bf && $br < $bf) $d = '<span class="red-text">' . $d . '</span>';
+            if ($state === 'done') {
+                $line = "Verified $name: " . fmt_when($vf['done_at'] ?? 0) . ', ' . number_format($c) . ' of ' . fmt_count($t) . " folders checked, $d";
+            } elseif ($state === 'running') {
+                $busy = true;
+                $line = "Verifying $name: " . number_format($c) . ' of ' . fmt_count($t) . " folders checked, $d";
+            } else {
+                $busy = true;
+                $line = "Verifying $name: waiting" . ($c ? ', ' . number_format($c) . ' of ' . fmt_count($t) . " folders checked, $d" : '...');
+            }
+            $v['verify_detail'] .= '<div class="uw-col-text">' . $line . '</div>';
         }
+        $v['verify'] = ($busy ? 'Verifying, ' : 'Verify complete, ') . $diffs($f, $r, $p);
     }
-    $v['disks'] = $cards;
     $v['pool_only'] = [];
     foreach (array_keys($st['pool_only'] ?? []) as $name) $v['pool_only'][$name] = pool_only_text($name, $st);
     return $v;
