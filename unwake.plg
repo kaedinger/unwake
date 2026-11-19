@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.19.51433-beta">
+  <!ENTITY version   "2026.11.19.54162-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,7 +20,7 @@
 >
 
 <CHANGES>
-### next
+### 2026.11.19.54162-beta
 - ui: the verifier has its own section, showing the current pass per disk: waiting, verifying or verified, with the differences found and repaired
 - fix: the verifier starts a new pass at most 12 hours after the last one ended
 - fix: a repair that has to wait because the folder changed is retried a minute later until it succeeds
