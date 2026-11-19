@@ -179,6 +179,26 @@ CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XF
 
 ---
 
+## Screenshots
+
+Status and settings:
+
+<img src="images/scr1_main.png" alt="Screenshot: status and settings" />
+
+Cache details and requests served from RAM:
+
+<img src="images/scr_statistics.png" alt="Screenshot: cache details and requests served from RAM" />
+
+Shares in RAM:
+
+<img src="images/scr_shares.png" alt="Screenshot: shares in RAM" />
+
+Activity log, an in-place update, stable and beta channel:
+
+<img src="images/scr2_log_stable_beta.png" alt="Screenshot: activity log and update channel" />
+
+---
+
 ## Requirements
 
 - Unraid 7.2.0 or newer (tested with 7.3.2)
