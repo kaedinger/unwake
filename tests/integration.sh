@@ -246,6 +246,7 @@ say "races: what a request saw doesn't overwrite a newer change"
 # then has their name but not their contents, so a lookup inside asks shfs
 R=media/movies/races; S="$T/mnt/disk1/stage"
 mkdir -p "$T/mnt/disk1/$R" "$S"; sleep 1.5
+ls "$T/mnt/user/$R" >/dev/null     # listed once: from now on its listing comes from RAM
 stage() { mkdir -p "$S/$1/$(dirname "$2")"; echo a > "$S/$1/$2"; mv "$S/$1" "$T/mnt/disk1/$R/$1"; sleep 1.5; }
 # 1: a name deleted while a lookup in a folder the tree doesn't have yet asks shfs
 stage rc1 f
@@ -259,6 +260,7 @@ echo 2000 > "$T/run/test-slow-lookup"
 stat "$T/mnt/user/$R/rc2/sub/f" >/dev/null 2>&1 & P=$!
 sleep 0.5; mv "$T/mnt/disk1/$R/rc2" "$T/mnt/disk1/$R/rc2x"; wait $P; rm -f "$T/run/test-slow-lookup"; sleep 1.5
 check "no ghost folder after a rename above a lookup" bash -c "! ls '$T/mnt/user/$R' | grep -qx rc2"
+check "the old path is gone" bash -c "! stat '$T/mnt/user/$R/rc2/sub/f' >/dev/null 2>&1"
 check "the renamed folder is there" test -e "$T/mnt/user/$R/rc2x/sub/f"
 # 3: a delete through Unwake while the same name comes back straight on the disk
 echo old > "$T/mnt/disk1/$R/rc3"; sleep 1.5
