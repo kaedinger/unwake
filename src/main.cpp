@@ -95,6 +95,28 @@ static long rss_kb() {
     return res * (sysconf(_SC_PAGESIZE) / 1024);
 }
 
+// Heap memory malloc has freed but keeps for reuse: the anonymous resident memory minus
+// what is allocated (mallinfo2's own free count also holds pages already given back).
+// Includes the threads' stacks, a few MB.
+static long kept_free_kb() {
+    static long kept = 0;
+    static int64_t at = 0;
+    int64_t now = now_ms();
+    if (at && now - at < 30000) return kept;     // mallinfo2 walks the free chunks under the arena locks
+    at = now;
+    long anon = 0;
+    {
+        std::ifstream f("/proc/self/status");
+        std::string line;
+        while (std::getline(f, line))
+            if (!line.compare(0, 8, "RssAnon:")) { anon = atol(line.c_str() + 8); break; }
+    }
+    struct mallinfo2 mi = mallinfo2();
+    long used = (long)((mi.uordblks + mi.hblkhd) / 1024);
+    kept = anon > used ? anon - used : 0;
+    return kept;
+}
+
 // RETURN_RAM=yes: once the kernel has forgotten many names (after the nightly backup's
 // inodes aged out of its cache), give the freed memory back to the system. Not while
 // it's still forgetting, and at most every 5 minutes; malloc_trim takes some ms.
@@ -127,6 +149,7 @@ static void write_status(const std::string& state, time_t started) {
     n("entries", g_tree.entries);
     n("inodes", fs_node_count());
     n("rss_kb", (uint64_t)rss_kb());
+    n("kept_free_kb", (uint64_t)kept_free_kb());
     n("events", g_events);
     n("lookup_hit", g_stats.lookup_hit); n("lookup_neg", g_stats.lookup_neg); n("lookup_miss", g_stats.lookup_miss);
     n("getattr_hit", g_stats.getattr_hit); n("getattr_miss", g_stats.getattr_miss);

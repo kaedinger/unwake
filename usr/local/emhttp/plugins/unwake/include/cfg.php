@@ -197,6 +197,7 @@ function status_view($st) {
         '<span>Names</span><span>' . number_format($st['entries'] ?? 0) . '</span>' .
         '<span>Names the kernel holds an inode for</span><span>' . number_format($st['inodes'] ?? 0) . '</span>' .
         '<span>RAM used by unwaked</span><span>' . fmt_bytes(($st['rss_kb'] ?? 0) * 1024) . '</span>' .
+        (isset($st['kept_free_kb']) ? '<span>of it freed, kept for reuse</span><span>' . fmt_bytes($st['kept_free_kb'] * 1024) . '</span>' : '') .
         '<span>Changes seen on the disks</span><span>' . number_format($st['events'] ?? 0) . '</span>' .
         '<span>File data</span><span>' . (!empty($st['passthrough']) ? 'kernel passthrough' : 'through unwaked') . '</span>' .
         '<span>Running since</span><span>' . (isset($st['started']) ? fmt_when($st['started']) : '-') . '</span></div>';
