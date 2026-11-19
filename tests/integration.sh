@@ -242,33 +242,37 @@ sleep 2
 check "listing equals shfs after in-band changes" same_listing
 
 say "races: what a request saw doesn't overwrite a newer change"
-R=media/movies/disk1-only
+# a folder of their own on disk1. Folders are moved in from a staging folder: the tree
+# then has their name but not their contents, so a lookup inside asks shfs
+R=media/movies/races; S="$T/mnt/disk1/stage"
+mkdir -p "$T/mnt/disk1/$R" "$S"; sleep 1.5
+stage() { mkdir -p "$S/$1/$(dirname "$2")"; echo a > "$S/$1/$2"; mv "$S/$1" "$T/mnt/disk1/$R/$1"; sleep 1.5; }
 # 1: a name deleted while a lookup in a folder the tree doesn't have yet asks shfs
-mkdir -p "$T/mnt/disk1/$R/rc1"; echo a > "$T/mnt/disk1/$R/rc1/f"; sleep 1.5
+stage rc1 f
 echo 2000 > "$T/run/test-slow-lookup"
 stat "$T/mnt/user/$R/rc1/f" >/dev/null 2>&1 & P=$!
 sleep 0.5; rm "$T/mnt/disk1/$R/rc1/f"; wait $P; rm -f "$T/run/test-slow-lookup"; sleep 1.5
 check "a name deleted during a lookup stays deleted" bash -c "! stat '$T/mnt/user/$R/rc1/f' >/dev/null 2>&1"
 # 2: a folder above renamed while a lookup below it asks shfs
-mkdir -p "$T/mnt/disk1/$R/rc2/sub"; echo a > "$T/mnt/disk1/$R/rc2/sub/f"; sleep 1.5
+stage rc2 sub/f
 echo 2000 > "$T/run/test-slow-lookup"
 stat "$T/mnt/user/$R/rc2/sub/f" >/dev/null 2>&1 & P=$!
 sleep 0.5; mv "$T/mnt/disk1/$R/rc2" "$T/mnt/disk1/$R/rc2x"; wait $P; rm -f "$T/run/test-slow-lookup"; sleep 1.5
 check "no ghost folder after a rename above a lookup" bash -c "! ls '$T/mnt/user/$R' | grep -qx rc2"
 check "the renamed folder is there" test -e "$T/mnt/user/$R/rc2x/sub/f"
 # 3: a delete through Unwake while the same name comes back straight on the disk
-echo old > "$T/mnt/user/$R/rc3"; sleep 1.5
+echo old > "$T/mnt/disk1/$R/rc3"; sleep 1.5
 echo 1500 > "$T/run/test-slow-unlink"
 rm "$T/mnt/user/$R/rc3" & P=$!
 sleep 0.4; echo new > "$T/mnt/disk1/$R/rc3"; wait $P; rm -f "$T/run/test-slow-unlink"; sleep 1.5
 check "a name back on the disk during a delete is there" test "$(cat "$T/mnt/user/$R/rc3" 2>&1)" = new
 # 4: a file grows on the disk while a lookup holds its old size
-mkdir -p "$T/mnt/disk1/$R/rc4"; echo a > "$T/mnt/disk1/$R/rc4/f"; sleep 1.5
+stage rc4 f
 echo 2500 > "$T/run/test-slow-lookup"
 stat "$T/mnt/user/$R/rc4/f" >/dev/null 2>&1 & P=$!
 sleep 0.4; echo "more and more" >> "$T/mnt/disk1/$R/rc4/f"; wait $P; rm -f "$T/run/test-slow-lookup"; sleep 1.5
 check "the newer size wins over a lookup's older one" test "$(stat -c %s "$T/mnt/user/$R/rc4/f")" = "$(stat -c %s "$T/mnt/disk1/$R/rc4/f")"
-rm -rf "$T/mnt/disk1/$R"/rc1 "$T/mnt/disk1/$R"/rc2x "$T/mnt/disk1/$R"/rc3 "$T/mnt/disk1/$R"/rc4; sleep 1.5
+rm -rf "$T"/mnt/*/media/movies/races "$S"; sleep 1.5
 check "listing equals shfs after the races" same_listing
 
 say "xattrs come with the full read"
