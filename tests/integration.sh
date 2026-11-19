@@ -296,17 +296,17 @@ for _ in $(seq 1 60); do sleep 0.5; [ "$(vpasses)" -ge 1 ] && break; done
 check "a full pass on every disk" test "$(vpasses)" -ge 1
 check "no differences after all the tests above" test ! -s "$T/verify.log"
 [ -s "$T/verify.log" ] && sed 's/^/  verify: /' "$T/verify.log" | head -40
-printf 'ghost disk1 media/shows/planted-ghost\ndrop disk2 media/shows/ep-disk2-3.mkv\nsize disk1 media/shows/ep-disk1-5.mkv\n' > "$T/run/test-plant"
-for _ in $(seq 1 60); do sleep 0.5; [ "$(grep -c 'difference(s), repaired' "$T/verify.log" 2>/dev/null)" -ge 3 ] && break; done
+printf 'ghost disk1 media/shows/planted-ghost\ndrop disk2 media/shows/ep-disk2-17.mkv\nsize disk1 media/shows/ep-disk1-5.mkv\n' > "$T/run/test-plant"
+for _ in $(seq 1 60); do sleep 0.5; [ "$(grep -cE '"(planted-ghost|ep-disk2-17.mkv|ep-disk1-5.mkv)"' "$T/verify.log" 2>/dev/null)" -ge 3 ] && break; done
 sed 's/^/  verify: /' "$T/verify.log" | head -20
 check "planted ghost found" grep -q '"planted-ghost": ghost' "$T/verify.log"
-check "planted missing name found" grep -q '"ep-disk2-3.mkv": missing' "$T/verify.log"
+check "planted missing name found" grep -q '"ep-disk2-17.mkv": missing' "$T/verify.log"
 check "planted wrong size found" grep -q '"ep-disk1-5.mkv": size RAM' "$T/verify.log"
 check "repaired: listing equals shfs" same_listing
 check "repaired: size as on the disk" test "$(stat -c %s "$T/mnt/user/media/shows/ep-disk1-5.mkv")" = "$(stat -c %s "$T/mnt/disk1/media/shows/ep-disk1-5.mkv")"
 check "the count on the status" test "$(stat_json "sum(b['verify']['diffs'] for b in d['branches'])")" -eq 3
 stat_json "[(b['name'], b['verify']) for b in d['branches']]" | sed 's/^/  verify status: /'
-grep -E 'verify|ep-disk2-3' "$T/unwake.log" | tail -15 | sed 's/^/  log: /'
+
 sed -i '/^VERIFY/d' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
 
 say "spun-down disk is never read"
