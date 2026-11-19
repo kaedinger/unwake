@@ -282,14 +282,14 @@ static bool pause_for(int64_t ms) {
 
 // NONE: no difference; UNSURE: differences that didn't hold still for a second look;
 // REPAIRED / FAILED: n confirmed differences, repaired or not (the folder changed meanwhile)
-enum Outcome { NONE, UNSURE, REPAIRED, FAILED };
+enum Outcome { SKIPPED, NONE, UNSURE, REPAIRED, FAILED };   // SKIPPED: not a folder known for this disk
 
 static Outcome check(int b, const std::string& rel, std::vector<std::string>* subdirs, uint64_t& n, bool retry) {
     Branch& br = *g_branches[b];
     std::map<std::string, InRam> ram;
     uint64_t gen = 0;
     n = 0;
-    if (!snapshot(b, rel, ram, gen, subdirs)) return NONE;
+    if (!snapshot(b, rel, ram, gen, subdirs)) return SKIPPED;
     std::string abs = br.root + (rel.empty() ? "" : "/" + rel);
     std::vector<Item> disk;
     if (!read_slice(abs, disk)) return NONE;      // gone meanwhile: its own events say so
@@ -399,12 +399,13 @@ static void verify_thread(int b) {
             if (watch_io) last_io = dev_ios(br);        // that was us
             if (o == REPAIRED) { s.found += n; s.repaired += n; }
             else if (o == FAILED) { s.found += n; s.pending += n; retries.push_back({rel, now_ms() + 60000, n}); }
-            s.checked++;
-            if (s.checked > s.total) s.total = s.checked.load();
+            if (o != SKIPPED) s.checked++;
             std::sort(subdirs.rbegin(), subdirs.rend());
             for (auto& d : subdirs) stack.push_back(std::move(d));
         }
         if (stack.empty()) {
+            s.total = s.checked.load();     // folders made or removed during the pass
+            br.harvest_dirs = s.total.load();   // the disk's folder count, as of this pass
             in_pass = false;
             s.done_at = time(nullptr);
             s.state = V_DONE;

@@ -223,6 +223,8 @@ function status_view($st) {
         $ssd = empty($b['rotational']);
         if (!empty($b['untracked'])) $state = '<span class="red-text">changes can\'t be watched</span>';
         elseif (!empty($b['harvesting'])) $state = 'reading its folders now';
+        elseif (!empty($b['harvested']) && ($b['verify']['done_at'] ?? 0) > ($b['harvested_at'] ?? 0))
+            $state = fmt_count($b['dirs']) . ' folders, verified ' . fmt_when($b['verify']['done_at']);
         elseif (!empty($b['harvested'])) $state = fmt_count($b['dirs']) . ' folders, read ' . fmt_when($b['harvested_at']) .
                                                   ' in ' . fmt_dur($b['harvest_ms']);
         else $state = $b['up'] ? 'waiting' : 'read when it next spins up';
