@@ -160,7 +160,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
   <dd class="uw-verify-row"<?= $view['verify'] ? '' : ' style="display:none;"' ?>>
     <div class="uw-fold-line" onclick="uwFold('verify')"><span id="uw-fold-caret-verify">&#9656;</span> <span id="uw-verify-line"><?= htmlspecialchars($view['verify'] ?: '-') ?></span></div>
     <div class="uw-fold-verify" style="display:none;" id="uw-verify-detail"><?= $view['verify_detail'] ?></div>
-    <div class="uw-help">Betas check the folders in RAM against the disks: a few folders per second, only while a disk spins anyway, a full pass at most every 12 hours. A difference counts only if a second look 5 seconds later shows the same. It is repaired in RAM and written to <code>/var/log/unwake-verify.log</code>, with what Unwake passed to shfs for that folder before. Stable versions verify with <code>VERIFY="yes"</code> in <code>unwake.cfg</code>.</div>
+    <div class="uw-help">Betas check the folders in RAM against the disks: a few folders per second, only while a disk spins and something else uses it (so it never keeps a disk from spinning down), a full pass at most every 12 hours. A difference counts only if a second look 5 seconds later shows the same. It is repaired in RAM and written to <code>/var/log/unwake-verify.log</code>, with what Unwake passed to shfs for that folder before. Stable versions verify with <code>VERIFY="yes"</code> in <code>unwake.cfg</code>.</div>
   </dd>
 </dl>
 

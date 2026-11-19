@@ -2,7 +2,8 @@
 //
 // One thread per disk or pool, at idle I/O priority. It walks the folders the tree
 // knows for that disk, a few per second (VERIFY_RATE), only while the disk spins
-// anyway and its folders were read once (harvested), and compares each folder's
+// anyway and its folders were read once (harvested) - and on a spinning disk only while
+// something else uses it too, so it never keeps a disk from spinning down - and compares each folder's
 // slice in RAM with the disk: names, type, mode, owner, links, size, the three
 // times, xattrs. A difference only counts if a second look 5 s later shows the same
 // and the folder didn't change in between (a change on its way through fanotify
@@ -254,6 +255,26 @@ static void test_plant() {
 // ---------------------------------------------------------------------------
 // The walk
 // ---------------------------------------------------------------------------
+// The disk's I/O count (reads + writes completed, all its devices); 0 if unknown
+static uint64_t dev_ios(const Branch& b) {
+    uint64_t t = 0;
+    for (auto& d : b.devices) {
+        std::ifstream f("/sys/block/" + d + "/stat");
+        uint64_t rd = 0, x = 0, wr = 0;
+        if (f >> rd >> x >> x >> x >> wr) t += rd + wr;
+    }
+    return t;
+}
+
+// folders a pass of branch b will check: those the tree knows for it (as the walk goes)
+static uint64_t count_known(const DirNode* d, Mask m) {
+    if (!(d->known & m)) return 0;
+    uint64_t n = 1;
+    for (auto& kv : d->entries)
+        if ((kv.second.mask & m) && kv.second.is_dir && kv.second.dir) n += count_known(kv.second.dir.get(), m);
+    return n;
+}
+
 static bool pause_for(int64_t ms) {
     std::unique_lock<std::mutex> l(_mu);
     _cv.wait_for(l, std::chrono::milliseconds(ms), [] { return _stop.load(); });
@@ -262,14 +283,14 @@ static bool pause_for(int64_t ms) {
 
 // NONE: no difference; UNSURE: differences that didn't hold still for a second look;
 // REPAIRED / FAILED: n confirmed differences, repaired or not (the folder changed meanwhile)
-enum Outcome { NONE, UNSURE, REPAIRED, FAILED };
+enum Outcome { SKIPPED, NONE, UNSURE, REPAIRED, FAILED };   // SKIPPED: not a folder known for this disk
 
 static Outcome check(int b, const std::string& rel, std::vector<std::string>* subdirs, uint64_t& n, bool retry) {
     Branch& br = *g_branches[b];
     std::map<std::string, InRam> ram;
     uint64_t gen = 0;
     n = 0;
-    if (!snapshot(b, rel, ram, gen, subdirs)) return NONE;
+    if (!snapshot(b, rel, ram, gen, subdirs)) return SKIPPED;
     std::string abs = br.root + (rel.empty() ? "" : "/" + rel);
     std::vector<Item> disk;
     if (!read_slice(abs, disk)) return NONE;      // gone meanwhile: its own events say so
@@ -311,8 +332,14 @@ static void verify_thread(int b) {
     VState& s = _st[b];
     std::vector<std::string> stack;
     bool in_pass = false;
+    std::string now_token;                  // tests only (test-verify-now)
     struct Retry { std::string rel; int64_t due; uint64_t n; };
     std::vector<Retry> retries;             // confirmed differences whose repair has to wait
+    // A spinning disk is only read while something else uses it too: our own reads would
+    // keep it from spinning down. Its I/O count moving between our reads is someone else.
+    bool watch_io = br.rotational && !br.devices.empty();
+    uint64_t last_io = dev_ios(br);
+    int64_t other_at = 0;                   // when someone else last used the disk
     while (!_stop) {
         long rate = std::max(1L, g_cfg.verify_rate.load());
         if (!pause_for(std::max<int64_t>(1, 1000 / rate))) break;
@@ -320,6 +347,11 @@ static void verify_thread(int b) {
         test_plant();
 #endif
         bool can = verify_on() && g_caching && br.up && br.harvested && !br.untracked && g_cfg.harvest;
+        if (watch_io) {
+            uint64_t io = dev_ios(br);
+            if (io != last_io) { other_at = now_ms(); last_io = io; }
+            if (now_ms() - other_at > 60000) can = false;   // nobody else: let it spin down
+        }
         if (!can) {
             if (in_pass || !s.done_at) s.state = V_WAITING;
             continue;
@@ -330,6 +362,7 @@ static void verify_thread(int b) {
         if (r != retries.end()) {
             uint64_t n = 0;
             Outcome o = check(b, r->rel, nullptr, n, true);
+            if (watch_io) last_io = dev_ios(br);        // that was us
             if (o == FAILED || o == UNSURE) r->due = now_ms() + 60000;
             else {                          // repaired now, or right by itself meanwhile
                 s.repaired += r->n;
@@ -341,19 +374,24 @@ static void verify_thread(int b) {
         if (!in_pass) {
             bool now_please = false;
 #if UNWAKE_TEST_HOOKS
-            // tests only: <run_dir>/test-verify-now newer than the last pass starts the next one
-            struct stat t;
-            if (!g_cfg.branch_args.empty() && stat((g_cfg.run_dir + "/test-verify-now").c_str(), &t) == 0 &&
-                t.st_mtime > s.done_at)
-                now_please = true;
+            // tests only: a new token in <run_dir>/test-verify-now starts the next pass at once
+            if (!g_cfg.branch_args.empty()) {
+                std::ifstream f(g_cfg.run_dir + "/test-verify-now");
+                std::string tok;
+                if (f >> tok && tok != now_token) { now_token = tok; now_please = true; }
+            }
 #endif
             if (s.done_at && time(nullptr) < s.done_at + g_cfg.verify_interval && !now_please) { s.state = V_DONE; continue; }
             stack.assign(1, "");
             s.checked = 0;
-            s.total = br.harvest_dirs.load();
+            {
+                std::shared_lock<std::shared_mutex> l(g_tree.mu);
+                s.total = count_known(&g_tree.root, bit(b));
+            }
             s.found = s.pending.load();     // still being repaired from the last pass
             s.repaired = 0;
             in_pass = true;
+            log_debug("verify " + br.name + ": pass started, " + std::to_string(s.total.load()) + " folders");
         }
         s.state = V_RUNNING;
         auto rel = stack.back();
@@ -362,15 +400,19 @@ static void verify_thread(int b) {
             std::vector<std::string> subdirs;
             uint64_t n = 0;
             Outcome o = check(b, rel, &subdirs, n, false);
+            if (watch_io) last_io = dev_ios(br);        // that was us
             if (o == REPAIRED) { s.found += n; s.repaired += n; }
             else if (o == FAILED) { s.found += n; s.pending += n; retries.push_back({rel, now_ms() + 60000, n}); }
-            s.checked++;
-            if (s.checked > s.total) s.total = s.checked.load();
+            if (o != SKIPPED) s.checked++;
             std::sort(subdirs.rbegin(), subdirs.rend());
             for (auto& d : subdirs) stack.push_back(std::move(d));
         }
         if (stack.empty()) {
+            s.total = s.checked.load();     // folders made or removed during the pass
+            br.harvest_dirs = s.total.load();   // the disk's folder count, as of this pass
             in_pass = false;
+            log_debug("verify " + br.name + ": pass done, " + std::to_string(s.checked.load()) + " folders, " +
+                      std::to_string(s.found.load()) + " difference(s)");
             s.done_at = time(nullptr);
             s.state = V_DONE;
         }
