@@ -300,7 +300,7 @@ check "no differences after all the tests above" test ! -s "$T/verify.log"
 sleep 2
 check "the next pass waits (12 hours)" test "$(stat_json "sum(b['verify']['checked'] for b in d['branches'])")" -gt 0 -a "$(vall)" = True
 printf 'ghost disk1 media/shows/planted-ghost\ndrop disk2 media/shows/ep-disk2-17.mkv\nsize disk1 media/shows/ep-disk1-5.mkv\n' > "$T/run/test-plant"
-sleep 1.1; touch "$T/run/test-verify-now"
+date +%s%N > "$T/run/test-verify-now"
 for _ in $(seq 1 60); do sleep 0.5; [ "$(grep -cE '"(planted-ghost|ep-disk2-17.mkv|ep-disk1-5.mkv)"' "$T/verify.log" 2>/dev/null)" -ge 3 ] && [ "$(vall)" = True ] && break; done
 sleep 2.5   # status.json is written every 2 s
 sed 's/^/  verify: /' "$T/verify.log" | head -20

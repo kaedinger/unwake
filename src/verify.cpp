@@ -331,6 +331,7 @@ static void verify_thread(int b) {
     VState& s = _st[b];
     std::vector<std::string> stack;
     bool in_pass = false;
+    std::string now_token;                  // tests only (test-verify-now)
     struct Retry { std::string rel; int64_t due; uint64_t n; };
     std::vector<Retry> retries;             // confirmed differences whose repair has to wait
     // A spinning disk is only read while something else uses it too: our own reads would
@@ -372,11 +373,12 @@ static void verify_thread(int b) {
         if (!in_pass) {
             bool now_please = false;
 #if UNWAKE_TEST_HOOKS
-            // tests only: <run_dir>/test-verify-now newer than the last pass starts the next one
-            struct stat t;
-            if (!g_cfg.branch_args.empty() && stat((g_cfg.run_dir + "/test-verify-now").c_str(), &t) == 0 &&
-                t.st_mtime > s.done_at)
-                now_please = true;
+            // tests only: a new token in <run_dir>/test-verify-now starts the next pass at once
+            if (!g_cfg.branch_args.empty()) {
+                std::ifstream f(g_cfg.run_dir + "/test-verify-now");
+                std::string tok;
+                if (f >> tok && tok != now_token) { now_token = tok; now_please = true; }
+            }
 #endif
             if (s.done_at && time(nullptr) < s.done_at + g_cfg.verify_interval && !now_please) { s.state = V_DONE; continue; }
             stack.assign(1, "");
@@ -388,6 +390,7 @@ static void verify_thread(int b) {
             s.found = s.pending.load();     // still being repaired from the last pass
             s.repaired = 0;
             in_pass = true;
+            log_debug("verify " + br.name + ": pass started, " + std::to_string(s.total.load()) + " folders");
         }
         s.state = V_RUNNING;
         auto rel = stack.back();
@@ -407,6 +410,8 @@ static void verify_thread(int b) {
             s.total = s.checked.load();     // folders made or removed during the pass
             br.harvest_dirs = s.total.load();   // the disk's folder count, as of this pass
             in_pass = false;
+            log_debug("verify " + br.name + ": pass done, " + std::to_string(s.checked.load()) + " folders, " +
+                      std::to_string(s.found.load()) + " difference(s)");
             s.done_at = time(nullptr);
             s.state = V_DONE;
         }
