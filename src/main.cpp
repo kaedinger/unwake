@@ -367,6 +367,23 @@ static int worker() {
                 }
             }
             if (g_cfg.return_ram && tick % 4 == 0) trim_ram();
+#if UNWAKE_TEST_HOOKS
+            // tests only: <run_dir>/test-dump holds a folder; its names in RAM go to test-dump.out
+            if (!g_cfg.branch_args.empty()) {
+                std::string dp = g_cfg.run_dir + "/test-dump", rel;
+                std::ifstream f(dp);
+                if (f && std::getline(f, rel)) {
+                    std::string out;
+                    {
+                        std::shared_lock<std::shared_mutex> l(g_tree.mu);
+                        DirNode* d = tree_find(rel);
+                        if (d) for (auto& kv : d->entries) out += kv.first + "\n";
+                    }
+                    write_file(dp + ".out", out);
+                    unlink(dp.c_str());
+                }
+            }
+#endif
             bool stopping_array = array_stopping();
             if ((_sig_stop || stopping_array) && !detached_at) {
                 auto t = top_mount(g_cfg.mountpoint);

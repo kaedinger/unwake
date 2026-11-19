@@ -262,6 +262,8 @@ sleep 0.5; mv "$T/mnt/disk1/$R/rc2" "$T/mnt/disk1/$R/rc2x"; wait $P; rm -f "$T/r
 # (the kernel lists with attributes after lookups, then without: a ghost shows in the second)
 check "no ghost folder after a rename above a lookup" bash -c "! { ls '$T/mnt/user/$R'; ls '$T/mnt/user/$R'; ls '$T/mnt/user/$R'; } | grep -qx rc2"
 check "the old path is gone" bash -c "! stat '$T/mnt/user/$R/rc2/sub/f' >/dev/null 2>&1"
+tree_names() { rm -f "$T/run/test-dump.out"; echo "$1" > "$T/run/test-dump"; for _ in $(seq 1 20); do [ -f "$T/run/test-dump.out" ] && break; sleep 0.2; done; cat "$T/run/test-dump.out"; }
+check "no ghost folder in RAM either" bash -c "! { $(declare -f tree_names); T='$T'; tree_names '$R'; } | grep -qx rc2"
 check "the renamed folder is there" test -e "$T/mnt/user/$R/rc2x/sub/f"
 # 3: a delete through Unwake while the same name comes back straight on the disk
 echo old > "$T/mnt/disk1/$R/rc3"; sleep 1.5
