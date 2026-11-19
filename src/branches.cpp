@@ -356,6 +356,7 @@ static void walk(int b) {
     int64_t t0 = now_ms();
     uint64_t ndirs = 0, nentries = 0, nread = 0;
     std::vector<std::string> stack{""};
+    std::unordered_map<std::string, int> tries;     // folders that changed while read
     br.harvesting = true;
     log_info("Harvest of " + br.name + " (" + br.root + ") started");
     while (!stack.empty()) {
@@ -369,7 +370,7 @@ static void walk(int b) {
         stack.pop_back();
         if (!tree_cacheable(rel)) continue;
 
-        uint64_t gen0;
+        uint64_t gen0, agen0;
         bool known;
         std::vector<std::string> subdirs;
         {
@@ -377,6 +378,7 @@ static void walk(int b) {
             DirNode* d = rel.empty() ? &g_tree.root : tree_ensure(rel, m);
             known = d->known & m;
             gen0 = d->gen;
+            agen0 = d->agen;
             if (known) {
                 for (auto& kv : d->entries)
                     if ((kv.second.mask & m) && kv.second.is_dir) subdirs.push_back(join_path(rel, kv.first));
@@ -389,9 +391,14 @@ static void walk(int b) {
             std::unique_lock<std::shared_mutex> l(g_tree.mu);
             DirNode* d = rel.empty() ? &g_tree.root : tree_find(rel);
             if (!d) continue;                       // removed meanwhile
-            if (d->gen != gen0) {                   // changed while we read: read again
-                log_debug("harvest of " + br.name + ": " + (rel.empty() ? "/" : rel) + " changed while read, reading again");
-                stack.push_back(rel);
+            if (d->gen != gen0 || d->agen != agen0) {   // changed while we read: read again, a few times
+                if (++tries[rel] <= 5) {
+                    log_debug("harvest of " + br.name + ": " + (rel.empty() ? "/" : rel) + " changed while read, reading again");
+                    stack.push_back(rel);
+                } else {
+                    // keeps changing: left to shfs (and fanotify) for now, not marked known
+                    log_debug("harvest of " + br.name + ": " + (rel.empty() ? "/" : rel) + " keeps changing, left out");
+                }
                 continue;
             }
             std::unordered_map<std::string, bool> seen;
@@ -419,7 +426,8 @@ static void walk(int b) {
                     d->pt_complete = false;
                 }
             }
-            d->known |= m;      // no gen bump: only events and our own changes race a reader
+            d->known |= m;
+            touch(d);           // readers that asked shfs before must not write over this
             for (auto& it : items)   // never into a mount we get no change events for
                 if (it.is_dir && events_dev_watched(it.dev)) subdirs.push_back(join_path(rel, it.name));
             nentries += items.size();

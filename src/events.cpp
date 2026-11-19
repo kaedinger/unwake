@@ -166,7 +166,7 @@ static void apply_added(int b, const std::string& rel_dir, const std::string& na
                         const struct stat& st, bool created, std::shared_ptr<const Xattrs> xs) {
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(rel_dir);
-    if (!d) return;
+    if (!d) { g_untraced++; return; }
     bool servable = tree_servable(d);
     auto r = d->entries.try_emplace(name);
     Entry& e = r.first->second;
@@ -192,20 +192,20 @@ static void apply_added(int b, const std::string& rel_dir, const std::string& na
         e.dir = std::move(nd);
         g_tree.dirs++;
     }
-    d->gen++;
+    touch(d);
 }
 
 static void apply_removed(int b, const std::string& rel_dir, const std::string& name, bool moved) {
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(rel_dir);
-    if (!d) return;
+    if (!d) { g_untraced++; return; }
     auto it = d->entries.find(name);
-    if (it == d->entries.end()) return;
+    if (it == d->entries.end()) { touch(d); return; }   // a reader may have seen it: it must not add it back
     Entry& e = it->second;
     bool source = e.has_attr && (e.attr_from >= 0 ? e.attr_from == b : e.mask && b == __builtin_ctzll(e.mask));
     e.mask &= ~bit(b);
     if (moved) drop_subtree(e);
-    d->gen++;
+    touch(d);
     if (e.mask) {                                     // still on another disk
         if (source) {
             // the copy we showed is gone (the Mover moved it): show the first remaining one -
@@ -243,7 +243,8 @@ static void flush_pending() {
         if (p.xattrs) xs = read_xattrs(abs);
         std::unique_lock<std::shared_mutex> l(g_tree.mu);
         DirNode* d = tree_find(p.dir);
-        if (!d) continue;
+        if (!d) { g_untraced++; continue; }
+        touch_attr(d);                                  // a reader's older stat must not land after this
         auto it = d->entries.find(p.name);
         if (it == d->entries.end()) continue;
         Entry& e = it->second;
@@ -252,7 +253,6 @@ static void flush_pending() {
         e.has_attr = true;
         e.attr_from = (int8_t)p.b;
         if (p.xattrs) e.xattrs = xs;
-        d->gen++;
     }
 }
 

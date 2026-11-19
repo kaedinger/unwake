@@ -14,6 +14,52 @@
 #include <sys/xattr.h>
 
 Tree g_tree;
+uint64_t g_untraced = 0;
+
+uint64_t tree_seq() {
+    static std::atomic<uint64_t> seq{0};
+    return ++seq;
+}
+static void seq_at_least(uint64_t v) {           // after an in-place upgrade: past every value handed over
+    while (tree_seq() < v) {}
+}
+
+PathSnap tree_snap(const std::string& dir) {
+    PathSnap s;
+    auto parts = split_path(dir);
+    s.want = parts.size() + 1;
+    std::shared_lock<std::shared_mutex> l(g_tree.mu);
+    s.untraced = g_untraced;
+    DirNode* d = &g_tree.root;
+    s.gens.push_back(d->gen);
+    for (auto& c : parts) {
+        auto it = d->entries.find(c);
+        if (it == d->entries.end() || !it->second.dir) break;
+        d = it->second.dir.get();
+        s.gens.push_back(d->gen);
+    }
+    if (s.gens.size() == s.want) s.agen = d->agen;
+    return s;
+}
+
+// Nothing changed along the path since s was taken: no folder on it gained, lost or
+// moved a name (attrs: and no entry of dir changed), no level that was missing
+// appeared, and if one was missing, no change happened outside the tree.
+bool tree_snap_ok(const std::string& dir, const PathSnap& s, bool attrs) {
+    auto parts = split_path(dir);
+    if (parts.size() + 1 != s.want) return false;
+    DirNode* d = &g_tree.root;
+    if (d->gen != s.gens[0]) return false;
+    for (size_t i = 0; i < parts.size(); i++) {
+        auto it = d->entries.find(parts[i]);
+        bool there = it != d->entries.end() && it->second.dir;
+        if (i + 1 >= s.gens.size()) return !there && g_untraced == s.untraced;
+        if (!there) return false;
+        d = it->second.dir.get();
+        if (d->gen != s.gens[i + 1]) return false;
+    }
+    return !attrs || d->agen == s.agen;
+}
 
 static constexpr size_t XATTR_KEEP_MAX = 4096;   // bigger xattr sets aren't kept
 static const std::shared_ptr<const Xattrs> _no_xattrs = std::make_shared<Xattrs>();
@@ -121,10 +167,10 @@ DirNode* tree_ensure(const std::string& rel, Mask present) {
             it->second.is_dir = true;
             it->second.dtype  = DT_DIR;
             g_tree.entries++;
-            d->gen++;
+            touch(d);
         }
         Entry& e = it->second;
-        if ((e.mask & present) != present) { e.mask |= present; d->gen++; }
+        if ((e.mask & present) != present) { e.mask |= present; touch(d); }
         if (!e.dir) attach_dir(d, it);
         d = e.dir.get();
     }
@@ -174,13 +220,13 @@ void tree_erase(DirNode* d, const std::string& name) {
     if (it == d->entries.end()) return;
     tree_count_add(it->second, -1);
     d->entries.erase(it);
-    d->gen++;
+    touch(d);
 }
 
 static void clear_branch_rec(DirNode* d, Mask b) {
     d->known &= ~b;
     d->pt_complete = false;
-    d->gen++;
+    touch(d);
     for (auto& kv : d->entries) {
         kv.second.mask &= ~b;
         if (kv.second.dir) clear_branch_rec(kv.second.dir.get(), b);
@@ -199,14 +245,15 @@ void tree_forget(const std::string& rel) {
     for (auto& kv : it->second.dir->entries) tree_count_add(kv.second, -1);
     g_tree.dirs--;
     it->second.dir.reset();
-    d->gen++;
+    touch(d);
 }
 
 void tree_clear_all() {
     g_tree.root.entries.clear();
     g_tree.root.known = 0;
     g_tree.root.pt_complete = false;
-    g_tree.root.gen++;
+    touch(&g_tree.root);
+    g_untraced++;
     g_tree.dirs = 1;
     g_tree.entries = 0;
 }
@@ -256,7 +303,8 @@ void dir_out(HoWriter& w, const DirNode& d, XattrsOut& xo) {
 void dir_in(HoReader& r, DirNode& d, std::vector<std::shared_ptr<const Xattrs>>& xs, uint64_t& dirs, uint64_t& entries) {
     d.known = r.u64();
     d.pt_complete = r.u8();
-    d.gen = r.u64();
+    d.gen = d.agen = r.u64();
+    seq_at_least(d.gen);
     uint64_t n = r.u64();
     d.entries.reserve(n);
     for (uint64_t i = 0; i < n; i++) {

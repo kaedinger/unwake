@@ -125,15 +125,38 @@ inline bool attr_from_branch_wins(const Entry& e, int b) {
     return e.mask && b == __builtin_ctzll(e.mask);
 }
 
+// Change counters. A reader that asks shfs or a disk and then writes what it learned
+// into the tree takes a PathSnap first and writes only if nothing changed meanwhile;
+// otherwise fanotify, which always re-checks the disk, has the last word. The counters
+// count changes on the disk, not changes of the tree: a removal of a name the tree
+// doesn't have bumps them too, and a change in a folder the tree doesn't have bumps
+// the global untraced counter. Values come from one sequence, so a folder that was
+// dropped and built again never shows an old value.
+uint64_t tree_seq();
+
 struct DirNode {
     DirNode*           parent = nullptr;
     const std::string* name   = nullptr;   // key of this dir in parent->entries
     std::unordered_map<std::string, Entry> entries;
     Mask     known       = 0;      // branches whose slice of this dir is fully known
     bool     pt_complete = false;  // union listing complete (from shfs), kept current since
-    uint64_t gen         = 0;      // bumped by every change, to detect races with readers
+    uint64_t gen         = tree_seq();     // names came, went or moved
+    uint64_t agen        = gen;            // an entry's attributes or xattrs changed
     Entry*   self_entry() const;   // this dir's entry in its parent (null for the root)
 };
+inline void touch(DirNode* d)      { d->gen = d->agen = tree_seq(); }
+inline void touch_attr(DirNode* d) { d->agen = tree_seq(); }
+extern uint64_t g_untraced;        // changes in folders not in the tree (tree lock held)
+
+// what a reader saw before asking shfs or a disk about names in dir
+struct PathSnap {
+    std::vector<uint64_t> gens;    // root .. the deepest folder of the path the tree has
+    uint64_t agen = 0;             // of dir itself, if the tree has it
+    size_t   want = 0;             // levels of the full path (root included)
+    uint64_t untraced = 0;
+};
+PathSnap tree_snap(const std::string& dir);                       // takes the lock
+bool     tree_snap_ok(const std::string& dir, const PathSnap& s, bool attrs);   // lock held
 
 struct Tree {
     std::shared_mutex mu;
