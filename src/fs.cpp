@@ -905,7 +905,12 @@ static void op_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
         int sfd = node_wfd(ino);   // the backing file if any: what was written is there
         std::string rel;
         struct stat st;
-        if (path_of(ino, rel) && fstat(sfd >= 0 ? sfd : h->fd, &st) == 0) cache_update(rel, st);
+        if (path_of(ino, rel) && fstat(sfd >= 0 ? sfd : h->fd, &st) == 0) {
+            // tests only: widen the window in which a rename overtakes this release
+            if (!g_cfg.branch_args.empty() && access((g_cfg.run_dir + "/test-slow-release").c_str(), F_OK) == 0)
+                usleep(300 * 1000);
+            cache_update(rel, st);
+        }
         node_wfd_add(ino, h->fd, false);
     }
     if (h->backing_id) node_backing_put(req, ino);

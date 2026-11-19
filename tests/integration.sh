@@ -222,15 +222,18 @@ check "rmdir" bash -c "rm -r '$U/moved-dir' && ! test -e '$U/moved-dir'"
 check "symlink" bash -c "ln -s inband.txt '$U/shows/sl' && test -L '$U/shows/sl' && test \$(readlink '$U/shows/sl') = inband.txt"
 check "hardlink" bash -c "ln '$U/shows/b' '$U/shows/hl' && stat -c '%h %i %n' '$U/shows/b' '$U/shows/hl' '$T/ref/media/shows/b' && test \$(cat '$U/shows/hl') = a && test \$(stat -c %h '$U/shows/b') = 2"
 # git's lock files: write a lot, close, rename at once - FUSE's RELEASE comes after the rename
+# (test-slow-release holds each release 300 ms, so the rename always gets in between)
+touch "$T/run/test-slow-release"
 python3 - "$U/shows" <<'PY'
 import os, sys
 for i in range(20):
     p = f"{sys.argv[1]}/lk{i}"
     fd = os.open(p + ".lock", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    os.write(fd, os.urandom(2000000)); os.close(fd)
+    os.write(fd, os.urandom(200000)); os.close(fd)
     os.rename(p + ".lock", p)
 PY
 sleep 2
+rm -f "$T/run/test-slow-release"
 check "no ghost of a file renamed right after writing it" test "$(ls "$U/shows" | grep -c 'lk.*\.lock')" -eq 0
 check "renamed files all there" test "$(ls "$U/shows" | grep -c '^lk[0-9]*$')" -eq 20
 rm -f "$U"/shows/lk*
