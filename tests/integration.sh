@@ -304,7 +304,9 @@ check "planted missing name found" grep -q '"ep-disk2-17.mkv": missing' "$T/veri
 check "planted wrong size found" grep -q '"ep-disk1-5.mkv": size RAM' "$T/verify.log"
 check "repaired: listing equals shfs" same_listing
 check "repaired: size as on the disk" test "$(stat -c %s "$T/mnt/user/media/shows/ep-disk1-5.mkv")" = "$(stat -c %s "$T/mnt/disk1/media/shows/ep-disk1-5.mkv")"
-check "the count on the status" test "$(stat_json "sum(b['verify']['diffs'] for b in d['branches'])")" -eq 3
+vdiffs() { stat_json "sum(b['verify']['diffs'] for b in d['branches'])"; }
+for _ in $(seq 1 10); do [ "$(vdiffs)" -ge 3 ] && break; sleep 0.5; done   # status.json is written every 2 s
+check "the count on the status" test "$(vdiffs)" -eq 3
 stat_json "[(b['name'], b['verify']) for b in d['branches']]" | sed 's/^/  verify status: /'
 
 sed -i '/^VERIFY/d' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
