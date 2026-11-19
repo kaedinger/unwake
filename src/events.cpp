@@ -232,6 +232,9 @@ static void flush_pending() {
     _pending.clear();
     for (auto& kv : todo) {
         auto& p = kv.second;
+        // after a read only (atime): a file read from the page cache doesn't need its disk;
+        // re-reading it then could, so not while the disk sleeps (pools are always up)
+        if (!p.xattrs && !g_branches[p.b]->up) continue;
         std::string abs = g_branches[p.b]->root + (p.dir.empty() ? "" : "/" + p.dir) + "/" + p.name;
         struct stat st;
         if (lstat(abs.c_str(), &st) != 0) continue;    // gone: a delete event follows

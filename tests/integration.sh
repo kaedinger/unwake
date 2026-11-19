@@ -173,6 +173,7 @@ check "system.LOCATION is the first" test "$(getfattr --absolute-names --only-va
 check "xattr visible" test "$(getfattr --only-values -n user.DOSATTRIB "$T/mnt/user/media/shows/ep-disk1-1.mkv")" = archive
 
 say "no disk reads once cached (the point of Unwake)"
+sleep 1.5   # the atime re-reads of the files read above are done (they'd read after the drop)
 browse; browse
 grep xfs_buf /proc/slabinfo | awk '{print "  xfs_buf before drop: " $2}'
 drop
