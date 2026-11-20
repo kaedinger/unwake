@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.20.48631-beta">
+  <!ENTITY version   "2026.11.20.52087-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,6 +20,10 @@
 >
 
 <CHANGES>
+### 2026.11.20.52087-beta
+- log: free-space queries are no longer listed (the web UI asks for every share every second, and they don't wake disks)
+- log: every request names the process that sent it (some named the one before)
+
 ### 2026.11.20.48631-beta
 - fix: a file is opened straight on the disk or pool shfs would take it from (pools first), as soon as every place before that is known not to have it - a file on the pool no longer goes through shfs, which looked for it on every array disk
 - fix: a folder newly made on a disk or pool (Unspin promoting a file, the Mover) counts as fully known there, so names missing in it are answered from RAM
