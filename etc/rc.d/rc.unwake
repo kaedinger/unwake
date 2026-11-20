@@ -244,8 +244,14 @@ unwake_diag() {
         echo "vfs_cache_pressure=$(cat /proc/sys/vm/vfs_cache_pressure)  cache_dirs running: $(pgrep -f '[c]ache_dirs' >/dev/null && echo yes || echo no)"
         free -m
         grep -E '^(xfs_buf|xfs_inode|dentry|fuse_inode) ' /proc/slabinfo 2>/dev/null | awk '{print $1, $2}'
-        echo "-- log (last 400 lines)"
-        tail -n 400 "$LOG_FILE" 2>/dev/null
+        # debug mode writes a line per change event and per root listing: an upload alone
+        # pushes everything else out of a plain tail. Those are left out here.
+        echo "-- log: info and above (last 300 lines)"
+        grep -v '\[DEBUG\]' "$LOG_FILE" 2>/dev/null | tail -n 300
+        if grep -q '\[DEBUG\]' "$LOG_FILE" 2>/dev/null; then
+            echo "-- log: debug, without change events and root listings (last 1500 lines)"
+            grep -vE '\] event |\] readdir hit /( |$)' "$LOG_FILE" 2>/dev/null | tail -n 1500
+        fi
         echo "-- verify log (last 400 lines)"
         tail -n 400 /var/log/unwake-verify.log 2>/dev/null
         # Unspin names the process behind a spin-up that Unwake didn't pass on

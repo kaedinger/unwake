@@ -99,7 +99,7 @@ static std::string by() {
 void note_shfs(const char* op, const std::string& rel, const std::string& to, const std::string& note, Mask mask) {
     std::string who = g_debug ? caller_name(t_caller) : std::string();
     if (g_debug)
-        log_debug("to shfs: " + std::string(op) + " " + (rel.empty() ? "/" : rel) + (to.empty() ? "" : " -> " + to) +
+        log_debug("to " + (mask ? g_branches[__builtin_ctzll(mask)]->name : std::string("shfs")) + ": " + std::string(op) + " " + (rel.empty() ? "/" : rel) + (to.empty() ? "" : " -> " + to) +
                   (note.empty() ? "" : " " + note) + (who.empty() ? "" : " [" + who + "]"));
     std::lock_guard<std::mutex> l(_req_mu);
     ShfsReq r{now_ms(), op, rel, to, note, mask, std::move(who)};
@@ -138,7 +138,7 @@ static Mask disks_of_dir(const std::string& dir) {
 
 static std::string dir_of(const std::string& rel);
 
-std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& others, std::vector<std::string>* other_lines) {
+std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& holding) {
     std::vector<ShfsReq> v;
     auto now = now_ms();
     {
@@ -148,36 +148,37 @@ std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& othe
     }
     std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.ms < b.ms; });
     Mask want = g_tree.per_branch && b >= 0 ? bit(b) : ~Mask(0);
-    std::vector<const ShfsReq*> hit, other;
-    others = 0;
+    std::vector<std::pair<const ShfsReq*, bool>> hit;   // request, for a folder on b
+    holding = 0;
     for (auto& r : v) {
-        Mask m = r.mask;
-        if (!m) {   // a share itself, or a listing: its own disks; anything else: its directory's
-            bool own = !strcmp(r.op, "readdir") || r.rel.find('/') == std::string::npos;
-            m = disks_of_dir(own ? r.rel : dir_of(r.rel));
-            if (!r.to.empty()) m |= disks_of_dir(dir_of(r.to));
+        if (r.mask) {   // went straight to that disk
+            if (r.mask & want) hit.push_back({&r, true});
+            continue;
         }
-        if (m & want) hit.push_back(&r);
-        else if (r.ms >= now - REQ_WINDOW) { others++; other.push_back(&r); }
+        // shfs looks the path up on every disk: any of them may have to read for it
+        bool own = !strcmp(r.op, "readdir") || r.rel.find('/') == std::string::npos;
+        Mask m = disks_of_dir(own ? r.rel : dir_of(r.rel));
+        if (!r.to.empty()) m |= disks_of_dir(dir_of(r.to));
+        bool on = m & want;
+        if (on) holding++;
+        hit.push_back({&r, on});
     }
     total = hit.size();
-    auto lines = [&](const std::vector<const ShfsReq*>& rs) {
-        std::vector<std::string> out;
-        for (size_t i = rs.size() > max ? rs.size() - max : 0; i < rs.size(); i++) {
-            auto& r = *rs[i];
-            char t[32];
-            time_t s = r.ms / 1000;
-            struct tm tm;
-            localtime_r(&s, &tm);
-            strftime(t, sizeof t, "%H:%M:%S", &tm);
-            out.push_back(std::string(t) + " " + r.op + " " + (r.rel.empty() ? "/" : r.rel) +
-                          (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note) +
-                          (r.who.empty() ? "" : " [" + r.who + "]"));
-        }
-        return out;
-    };
-    if (other_lines) *other_lines = lines(other);
-    return lines(hit);
+    std::string bname = b >= 0 && (size_t)b < g_branches.size() ? g_branches[b]->name : std::string();
+    std::vector<std::string> out;
+    for (size_t i = hit.size() > max ? hit.size() - max : 0; i < hit.size(); i++) {
+        auto& r = *hit[i].first;
+        char t[32];
+        time_t s = r.ms / 1000;
+        struct tm tm;
+        localtime_r(&s, &tm);
+        strftime(t, sizeof t, "%H:%M:%S", &tm);
+        out.push_back(std::string(t) + " " + r.op + " " + (r.rel.empty() ? "/" : r.rel) +
+                      (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note) +
+                      (r.who.empty() ? "" : " [" + r.who + "]") +
+                      (r.mask ? " (straight to " + bname + ")" : hit[i].second ? " (folder on " + bname + ")" : ""));
+    }
+    return out;
 }
 
 std::vector<std::string> shfs_recent(const std::string& dir, size_t max) {
@@ -405,6 +406,34 @@ static std::string base_of(const std::string& rel) {
 }
 static bool caching_for(const std::string& rel) { return g_caching && tree_cacheable(rel); }
 
+// Where a request for rel goes when RAM can't answer it: shfs, or - for a share kept on
+// one SSD pool with nothing on the array (pool_branch_of) - that pool directly. shfs
+// would look the path up on every array disk first, and wake any whose folder entries
+// the kernel has dropped. Names are placed by shfs only (create, mkdir, rename, link,
+// unlink): those always go there.
+struct Via { int fd; int b; };     // b >= 0: straight to branch b
+static int branch_fd(int b) {
+    static std::mutex mu;
+    static std::vector<int> fds;
+    std::lock_guard<std::mutex> l(mu);
+    if (fds.size() < g_branches.size()) fds.resize(g_branches.size(), -1);
+    if (fds[b] < 0) fds[b] = open(g_branches[b]->root.c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC);
+    return fds[b];
+}
+static Via via(const std::string& rel) {
+    if (rel.empty() || !g_caching || caching_for(rel)) return {g_shfs_fd, -1};
+    int b = pool_branch_of(rel.substr(0, rel.find('/')));
+    int fd = b >= 0 ? branch_fd(b) : -1;
+    return fd >= 0 ? Via{fd, b} : Via{g_shfs_fd, -1};
+}
+static std::string via_path(const Via& v, const std::string& rel) {
+    return "/proc/self/fd/" + std::to_string(v.fd) + (rel.empty() ? "" : "/" + rel);
+}
+static void note_via(const char* op, const std::string& rel, const Via& v, const std::string& note = {}) {
+    note_shfs(op, rel, {}, note, v.b >= 0 ? bit(v.b) : 0);
+    if (v.b >= 0) g_stats.pool_direct++;
+}
+
 static void reply_entry(fuse_req_t req, fuse_ino_t parent, const std::string& name, const struct stat& st) {
     struct fuse_entry_param e = {};
     e.ino = node_ref(parent, name);
@@ -423,7 +452,9 @@ static void reply_negative(fuse_req_t req) {
 
 // 1 = known (a filled), 0 = known absent, -1 = unknown
 static int cache_get(const std::string& rel, Attr& a) {
-    if (rel.empty() || !caching_for(rel)) return -1;
+    // a share's own entry in the root is kept current for every share, also those passed on
+    bool top = rel.find('/') == std::string::npos;
+    if (rel.empty() || !g_caching || (!top && !caching_for(rel))) return -1;
     std::shared_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(dir_of(rel));
     if (!d) return -1;
@@ -589,11 +620,12 @@ static void op_lookup(fuse_req_t req, fuse_ino_t parent, const char* name) {
     }
     if (c == 0) { g_stats.lookup_neg++; return reply_negative(req); }
     g_stats.lookup_miss++;
-    note_shfs("lookup", rel);
+    auto v = via(rel);
+    note_via("lookup", rel, v);
     if (caching_for(rel)) log_debug("lookup miss " + rel + by());   // shares not in RAM: no line per request
     auto gen0 = cache_gen(prel);
     struct stat st;
-    if (fstatat(g_shfs_fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) {
+    if (fstatat(v.fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) {
         if (errno == ENOENT) return reply_negative(req);
         return (void)fuse_reply_err(req, errno);
     }
@@ -664,9 +696,10 @@ static void op_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
             a.to(st, ino);
             return (void)fuse_reply_attr(req, &st, ATTR_TIMEOUT);
         }
-        if (!rel.empty()) { g_stats.getattr_miss++; note_shfs("getattr", rel); }
+        auto v = via(rel);
+        if (!rel.empty()) { g_stats.getattr_miss++; note_via("getattr", rel, v); }
         auto gen0 = cache_gen(dir_of(rel));
-        if (fstatat(g_shfs_fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW) != 0) return (void)fuse_reply_err(req, errno);
+        if (fstatat(v.fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW) != 0) return (void)fuse_reply_err(req, errno);
         cache_put(rel, st, gen0);
     }
     st.st_ino = ino;
@@ -677,16 +710,17 @@ static void op_setattr(fuse_req_t req, fuse_ino_t ino, struct stat* attr, int to
     std::string rel;
     int fd = fd_of(fi);
     if (!path_of(ino, rel) && fd < 0) return (void)fuse_reply_err(req, ENOENT);
+    auto v = via(rel);
     int r = 0;
     if (to_set & FUSE_SET_ATTR_MODE)
-        r = fd >= 0 ? fchmod(fd, attr->st_mode) : fchmodat(g_shfs_fd, rp(rel), attr->st_mode, 0);
+        r = fd >= 0 ? fchmod(fd, attr->st_mode) : fchmodat(v.fd, rp(rel), attr->st_mode, 0);
     if (!r && (to_set & (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID))) {
         uid_t u = (to_set & FUSE_SET_ATTR_UID) ? attr->st_uid : (uid_t)-1;
         gid_t g = (to_set & FUSE_SET_ATTR_GID) ? attr->st_gid : (gid_t)-1;
-        r = fd >= 0 ? fchown(fd, u, g) : fchownat(g_shfs_fd, rp(rel), u, g, AT_SYMLINK_NOFOLLOW);
+        r = fd >= 0 ? fchown(fd, u, g) : fchownat(v.fd, rp(rel), u, g, AT_SYMLINK_NOFOLLOW);
     }
     if (!r && (to_set & FUSE_SET_ATTR_SIZE))
-        r = fd >= 0 ? ftruncate(fd, attr->st_size) : truncate(proc_path(rel).c_str(), attr->st_size);
+        r = fd >= 0 ? ftruncate(fd, attr->st_size) : truncate(via_path(v, rel).c_str(), attr->st_size);
     if (!r && (to_set & (FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME))) {
         struct timespec ts[2];
         ts[0].tv_nsec = ts[1].tv_nsec = UTIME_OMIT;
@@ -694,12 +728,13 @@ static void op_setattr(fuse_req_t req, fuse_ino_t ino, struct stat* attr, int to
         else if (to_set & FUSE_SET_ATTR_ATIME) ts[0] = attr->st_atim;
         if (to_set & FUSE_SET_ATTR_MTIME_NOW) ts[1].tv_nsec = UTIME_NOW;
         else if (to_set & FUSE_SET_ATTR_MTIME) ts[1] = attr->st_mtim;
-        r = fd >= 0 ? futimens(fd, ts) : utimensat(g_shfs_fd, rp(rel), ts, AT_SYMLINK_NOFOLLOW);
+        r = fd >= 0 ? futimens(fd, ts) : utimensat(v.fd, rp(rel), ts, AT_SYMLINK_NOFOLLOW);
     }
     if (r) return fail(req, "setattr", rel, errno);
-    note_shfs("setattr", rel);
+    if (fd < 0) note_via("setattr", rel, v);
+    else note_shfs("setattr", rel);
     struct stat st;
-    if ((fd >= 0 ? fstat(fd, &st) : fstatat(g_shfs_fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW)) != 0)
+    if ((fd >= 0 ? fstat(fd, &st) : fstatat(v.fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW)) != 0)
         return (void)fuse_reply_err(req, errno);
     cache_update(rel, st);
     st.st_ino = ino;
@@ -710,8 +745,9 @@ static void op_readlink(fuse_req_t req, fuse_ino_t ino) {
     std::string rel;
     if (!path_of(ino, rel)) return (void)fuse_reply_err(req, ENOENT);
     char buf[PATH_MAX + 1];
-    note_shfs("readlink", rel);
-    auto n = readlinkat(g_shfs_fd, rp(rel), buf, sizeof buf - 1);
+    auto v = via(rel);
+    note_via("readlink", rel, v);
+    auto n = readlinkat(v.fd, rp(rel), buf, sizeof buf - 1);
     if (n < 0) return (void)fuse_reply_err(req, errno);
     buf[n] = 0;
     fuse_reply_readlink(req, buf);
@@ -878,8 +914,9 @@ static void op_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi) {
         }
     }
     if (fd < 0) {
-        note_shfs((flags & O_ACCMODE) == O_RDONLY && !(flags & O_TRUNC) ? "open" : "open (write)", rel);
-        fd = openat(g_shfs_fd, rel.c_str(), flags);
+        auto v = via(rel);     // an existing file: a pool-only share's pool can open it, also for writing
+        note_via((flags & O_ACCMODE) == O_RDONLY && !(flags & O_TRUNC) ? "open" : "open (write)", rel, v);
+        fd = openat(v.fd, rel.c_str(), flags);
         if (fd < 0) {
             int e = errno;
             if (e == ENOENT) cache_removed(rel);    // shfs has it nowhere: the tree was wrong
@@ -1016,9 +1053,10 @@ static void op_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
     if (hit) { g_stats.readdir_hit++; log_debug("readdir hit " + (rel.empty() ? "/" : rel) + by()); }
     else {
         g_stats.readdir_miss++;
-        note_shfs("readdir", rel);
+        auto v = via(rel);
+        note_via("readdir", rel, v);
         if (rel.empty() || caching_for(rel)) log_debug("readdir miss " + (rel.empty() ? "/" : rel) + by());
-        int fd = openat(g_shfs_fd, rp(rel), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        int fd = openat(v.fd, rp(rel), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         DIR* dp = fd >= 0 ? fdopendir(fd) : nullptr;
         if (!dp) {
             int e = errno;
@@ -1089,8 +1127,9 @@ static void do_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, s
                 if (!de.has_attr) {
                     struct stat st;
                     auto gen0 = cache_gen(dh->rel);
-                    note_shfs("getattr", rel);
-                    if (fstatat(g_shfs_fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) continue;   // gone
+                    auto v = via(rel);
+                    note_via("getattr", rel, v);
+                    if (fstatat(v.fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) continue;   // gone
                     cache_put(rel, st, gen0);
                     de.attr.from(st);
                     de.has_attr = true;
@@ -1155,14 +1194,15 @@ static int xattrs_of(const std::string& rel, Xattrs& out) {
         }
     }
     g_stats.xattr_miss++;
-    note_shfs("xattr", rel);
+    auto v = via(rel);
+    note_via("xattr", rel, v);
     auto gen0 = rel.empty() ? 0 : cache_gen(dir_of(rel));
     int err = 0;
-    auto xs = read_xattrs(proc_path(rel), &err);
+    auto xs = read_xattrs(via_path(v, rel), &err);
     if (err) return err;
     if (!xs) {      // too big to keep: read them for this caller only
         out.clear();
-        auto p = proc_path(rel);
+        auto p = via_path(v, rel);
         std::vector<char> names(65536);
         ssize_t n = llistxattr(p.c_str(), names.data(), names.size());
         if (n < 0) return errno;
@@ -1192,6 +1232,14 @@ static int xattrs_of(const std::string& rel, Xattrs& out) {
 static bool location_from_tree(const std::string& rel, bool all, std::string& out) {
     // a share's own entry in the root is kept current even for shares passed to shfs
     bool top = rel.find('/') == std::string::npos;
+    if (!rel.empty() && g_caching && !top && !caching_for(rel)) {
+        auto v = via(rel);     // a pool-only share with nothing on the array: all of it is on that pool
+        if (v.b < 0) return false;
+        struct stat st;
+        if (fstatat(v.fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) return false;
+        out = g_branches[v.b]->name;
+        return true;
+    }
     if (rel.empty() || !g_caching || (!top && !caching_for(rel)) || !g_tree.per_branch) return false;
     std::shared_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(dir_of(rel));
@@ -1269,8 +1317,9 @@ static void op_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size) {
 static void op_setxattr(fuse_req_t req, fuse_ino_t ino, const char* name, const char* value, size_t size, int flags) {
     std::string rel;
     if (!path_of(ino, rel)) return (void)fuse_reply_err(req, ENOENT);
-    if (!rel.empty()) note_shfs("setxattr", rel, {}, name);
-    auto p = proc_path(rel);
+    auto v = via(rel);
+    if (!rel.empty()) note_via("setxattr", rel, v, name);
+    auto p = via_path(v, rel);
     int r = rel.empty() ? setxattr(p.c_str(), name, value, size, flags) : lsetxattr(p.c_str(), name, value, size, flags);
     cache_xattrs_unknown(rel);
     fuse_reply_err(req, r == 0 ? 0 : errno);
@@ -1279,8 +1328,9 @@ static void op_setxattr(fuse_req_t req, fuse_ino_t ino, const char* name, const 
 static void op_removexattr(fuse_req_t req, fuse_ino_t ino, const char* name) {
     std::string rel;
     if (!path_of(ino, rel)) return (void)fuse_reply_err(req, ENOENT);
-    if (!rel.empty()) note_shfs("removexattr", rel, {}, name);
-    auto p = proc_path(rel);
+    auto v = via(rel);
+    if (!rel.empty()) note_via("removexattr", rel, v, name);
+    auto p = via_path(v, rel);
     int r = rel.empty() ? removexattr(p.c_str(), name) : lremovexattr(p.c_str(), name);
     cache_xattrs_unknown(rel);
     fuse_reply_err(req, r == 0 ? 0 : errno);

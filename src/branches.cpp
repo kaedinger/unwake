@@ -134,27 +134,25 @@ static struct timespec _ini_mtime = {0, 0};
 
 // A disk that spun up: say what Unwake passed to shfs just before that may have reached
 // it. If nothing, Unwake didn't let it through - Unspin's Disk Wake-ups names who did.
+// shfs looks a path up on every disk, so every request it got counts, not only those
+// for folders the disk holds (those are marked).
 static void spin_changed(Branch& b, bool up) {
     if (!b.rotational || !_spin_known) return;
     if (!up) { log_debug(b.name + " spun down"); return; }
     int idx = -1;
     for (size_t i = 0; i < g_branches.size(); i++) if (g_branches[i].get() == &b) idx = (int)i;
-    size_t total = 0, others = 0;
-    std::vector<std::string> olines;
-    auto reqs = shfs_for(idx, 12, total, others, &olines);
-    std::string other = others ? " (" + std::to_string(others) + " for other disks only)" : "";
+    size_t total = 0, holding = 0;
+    auto reqs = shfs_for(idx, 12, total, holding);
     if (reqs.empty()) {
-        // shfs checks a path on every disk, so these may have reached it too
-        std::string list;
-        for (auto& r : olines) list += "\n    " + r + " (other disks)";
-        log_info(b.name + " spun up - Unwake passed nothing for it to shfs in the 30 s before (writes: 2 min)" + other +
-                 (olines.empty() ? "" : (others > olines.size() ? ", the last " + std::to_string(olines.size()) : std::string()) + ":") + list);
+        log_info(b.name + " spun up - Unwake passed nothing to shfs or to " + b.name + " in the 30 s before (writes: 2 min)");
         return;
     }
+    // shfs looks every path up on every disk: each request may have reached this one
     std::string list;
     for (auto& r : reqs) list += "\n    " + r;
-    log_info(b.name + " spun up - Unwake passed " + std::to_string(total) + " request(s) for it to shfs in the 30 s before (writes: 2 min)" +
-             (total > reqs.size() ? ", the last " + std::to_string(reqs.size()) : std::string()) + other + ":" + list);
+    log_info(b.name + " spun up - Unwake passed " + std::to_string(total) + " request(s) in the 30 s before (writes: 2 min), " +
+             std::to_string(holding) + " for folders on " + b.name + "; shfs looks each one up on every disk" +
+             (total > reqs.size() ? ". The last " + std::to_string(reqs.size()) : std::string()) + ":" + list);
 }
 
 void spin_poll() {
@@ -299,6 +297,33 @@ std::string pool_only_json() {
         o += "]}";
     }
     return o + "}";
+}
+
+// The pool a pool-only share can be reached on directly: its settings keep it on SSD
+// pools, every array disk's top level is known and none holds a folder of it, and
+// exactly one pool does. -1 otherwise (then shfs, which looks the path up on every disk).
+// Kept current by fanotify: an overflow onto an array disk (pool full) shows up there
+// as a new top-level folder, and the share goes through shfs until it's gone again.
+int pool_branch_of(const std::string& share) {
+    {
+        std::lock_guard<std::mutex> l(_pool_mu);
+        if (!_pool_state.count(share)) return -1;
+    }
+    if (!g_tree.per_branch) return -1;
+    std::shared_lock<std::shared_mutex> l(g_tree.mu);
+    auto it = g_tree.root.entries.find(share);
+    if (it == g_tree.root.entries.end()) return -1;
+    int pool = -1;
+    for (size_t i = 0; i < g_branches.size() && i < (size_t)MAX_BRANCHES; i++) {
+        Mask b = bit((int)i);
+        if (g_branches[i]->rotational) {
+            if (!(g_tree.root.known & b) || (it->second.mask & b)) return -1;
+        } else if (it->second.mask & b) {
+            if (pool >= 0) return -1;      // on two pools: shfs merges them
+            pool = (int)i;
+        }
+    }
+    return pool;
 }
 
 int branch_of_path(const std::string& abs, std::string& rel) {

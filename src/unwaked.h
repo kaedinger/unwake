@@ -188,6 +188,7 @@ void  harvester_restart(int b);          // re-walk later (after a lost event)
 bool  array_stopping();                  // var.ini says the array is going down
 void  apply_exclusions();                // effective excluded shares from config + share settings
 void  recompute_exclusions();            // SSD-pool-only shares: passed through unless an array disk holds them
+int pool_branch_of(const std::string& share);   // the pool a pool-only share is reached on directly, or -1
 std::string pool_only_json();            // {"share": {"known": 0|1, "on": ["disk2"]}}
 
 // ---------------------------------------------------------------------------
@@ -216,6 +217,7 @@ struct Stats {
     std::atomic<uint64_t> readdir_hit{0}, readdir_miss{0};
     std::atomic<uint64_t> xattr_hit{0}, xattr_miss{0};
     std::atomic<uint64_t> open_direct{0}, open_shfs{0};
+    std::atomic<uint64_t> pool_direct{0};      // requests in pool-only shares answered by their pool, not shfs
 };
 extern Stats g_stats;
 extern int   g_shfs_fd;                  // O_PATH fd of shfs, under our mount
@@ -235,8 +237,10 @@ void loop_finish();                // after a hand-over: the threads end, loop_r
 void note_shfs(const char* op, const std::string& rel, const std::string& to = {}, const std::string& note = {},
                Mask mask = 0);
 // requests that may have reached branch b: writes from the last 2 minutes (the journal
-// reaches the disk up to a minute later), everything else from the last 30 s
-std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& others,
-                                  std::vector<std::string>* other_lines = nullptr);
+// reaches the disk up to a minute later), everything else from the last 30 s. shfs
+// looks a path up on every disk, so every request to shfs counts; holding: how many
+// of them were for a folder b holds (marked "on <disk>" in the lines). Requests that
+// went straight to one disk count only for that one.
+std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& holding);
 // the last requests passed to shfs for names in dir (of the last 512 requests, any age)
 std::vector<std::string> shfs_recent(const std::string& dir, size_t max);

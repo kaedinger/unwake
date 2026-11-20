@@ -323,10 +323,22 @@ static void handle(const struct fanotify_event_metadata* ev, std::map<std::strin
     abs[n] = 0;
     std::string rel;
     int b = branch_of_path(abs, rel);
-    if (b < 0 || !tree_cacheable(rel)) { close(dfd); return; }
+    if (b < 0) { close(dfd); return; }
+    auto slash = rel.rfind('/');
+    std::string parent = slash == std::string::npos ? "" : rel.substr(0, slash);
     if (self) {
-        auto slash = rel.rfind('/');
-        if (!rel.empty()) restat_later(b, slash == std::string::npos ? "" : rel.substr(0, slash), rel.substr(slash + 1));
+        // its entry lives in the parent: kept if the parent is (a share's own entry in the
+        // root is, for every share - Unwake answers share names from RAM)
+        if (!rel.empty() && tree_cacheable(parent)) restat_later(b, parent, rel.substr(slash + 1));
+        close(dfd);
+        return;
+    }
+    if (!tree_cacheable(rel)) {
+        // a share passed on: its contents aren't kept, but a name coming or going in its
+        // top folder changes that folder's mtime, and its entry in the root is kept
+        if (!rel.empty() && slash == std::string::npos &&
+            (ev->mask & (FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO)))
+            restat_later(b, "", rel, false);
         close(dfd);
         return;
     }
@@ -345,10 +357,8 @@ static void handle(const struct fanotify_event_metadata* ev, std::map<std::strin
     if (ev->mask & (FAN_ATTRIB | FAN_MODIFY)) restat_later(b, rel, name);
     else if (ev->mask & (FAN_CLOSE_NOWRITE | FAN_CLOSE_WRITE)) restat_later(b, rel, name, false);   // read: atime
     // a name came or went: the folder's own mtime and ctime changed, with no event of its own
-    if ((ev->mask & (FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO)) && !rel.empty()) {
-        auto slash = rel.rfind('/');
-        restat_later(b, slash == std::string::npos ? "" : rel.substr(0, slash), rel.substr(slash + 1), false);
-    }
+    if ((ev->mask & (FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO)) && !rel.empty())
+        restat_later(b, parent, rel.substr(slash + 1), false);
     close(dfd);
     if (g_debug) log_debug("event " + std::string(abs) + "/" + name + " mask 0x" +
                            [&] { char x[20]; snprintf(x, sizeof x, "%llx", (unsigned long long)ev->mask); return std::string(x); }());

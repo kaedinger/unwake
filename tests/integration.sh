@@ -250,6 +250,29 @@ r0=$(reads disk1 disk2)
  getfattr -n system.posix_acl_default media/movies/* media/shows media/deep/a/b/c/d/e/f/g/* >/dev/null 2>&1)
 r1=$(reads disk1 disk2)
 check "xattrs and ACLs of never-touched files and locations of passed-through shares: 0 array reads (got $((r1 - r0)))" test "$r1" -eq "$r0"
+# a pool-only share with nothing on the array: its name from RAM, everything in it from the
+# pool directly - shfs would look each path up on every array disk
+drop
+s0=$(grep -c 'to shfs: [a-z ()]* docs' "$T/unwake.log")
+r0=$(reads disk1 disk2)
+(cd "$T/mnt/user" && stat docs appdata >/dev/null; ls -l docs/notes >/dev/null; cat docs/notes/n3.txt >/dev/null
+ stat docs/notes/not-there 2>/dev/null; getfattr -d docs/notes/n4.txt >/dev/null 2>&1; touch docs/notes/n5.txt
+ getfattr -n system.LOCATION docs/notes/n6.txt >/dev/null 2>&1; true)
+r1=$(reads disk1 disk2)
+check "pool-only share after a cache drop: 0 array reads (got $((r1 - r0)))" test "$r1" -eq "$r0"
+check "pool-only share: requests go to the pool, none to shfs" bash -c "grep -q 'to cache: open docs/notes/n3.txt' '$T/unwake.log' && test \$(grep -c 'to shfs: [a-z ()]* docs' '$T/unwake.log') -eq $s0"
+check "pool-only share: content as through shfs" test "$(cat "$T/mnt/user/docs/notes/n3.txt")" = "$(cat "$T/ref/docs/notes/n3.txt")"
+check "pool-only share: attributes as through shfs" test "$(stat -c '%s %a %Y' "$T/mnt/user/docs/notes/n5.txt")" = "$(stat -c '%s %a %Y' "$T/ref/docs/notes/n5.txt")"
+check "pool-only share: location from the pool" test "$(getfattr --absolute-names --only-values -n system.LOCATION "$T/mnt/user/docs/notes/n6.txt")" = cache
+check "share name from RAM: mtime after a change in its top folder" bash -c "touch '$T/mnt/cache/docs/top-new'; sleep 2; test \"\$(stat -c %Y '$T/mnt/user/docs')\" = \"\$(stat -c %Y '$T/ref/docs')\""
+rm -f "$T/mnt/cache/docs/top-new"
+# overflow: the pool was full, shfs put files of it on an array disk - then it goes through shfs
+mkdir -p "$T/mnt/disk2/docs"; echo overflow > "$T/mnt/disk2/docs/overflow.txt"; sleep 5
+check "pool-only share with a folder on an array disk: its files there are found" test "$(cat "$T/mnt/user/docs/overflow.txt" 2>&1)" = overflow
+rm -r "$T/mnt/disk2/docs"; sleep 5
+n0=$(grep -c 'to cache: lookup docs/notes/n7.txt' "$T/unwake.log")
+stat "$T/mnt/user/docs/notes/n7.txt" >/dev/null
+check "and once that folder is gone, straight to the pool again" test "$(grep -c 'to cache: lookup docs/notes/n7.txt' "$T/unwake.log")" -gt "$n0"
 check "default ACL from RAM, as through shfs" test "$(getfacl -d --omit-header "$T/mnt/user/media/movies/disk1-only")" = "$(getfacl -d --omit-header "$T/ref/media/movies/disk1-only")"
 check "no default ACL from RAM, as through shfs" test "$(getfacl -d --omit-header "$T/mnt/user/media/shows")" = "$(getfacl -d --omit-header "$T/ref/media/shows")"
 setfacl -d -m u:nobody:rwx "$T/mnt/disk1/media/movies/disk1-only"; sleep 2
