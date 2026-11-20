@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.19.59052-beta">
+  <!ENTITY version   "2026.11.20.37401-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,6 +20,12 @@
 >
 
 <CHANGES>
+### 2026.11.20.37401-beta
+- fix: saving the settings page keeps settings it doesn't show (VERIFY, VERIFY_RATE, VERIFY_INTERVAL)
+- log: in debug mode, every request passed to shfs gets a line with the process that sent it; listings and missed lookups name the process too
+- log: when a disk spins up with nothing passed to shfs for it, the spin-up line lists the requests for other disks - shfs checks every disk
+- diag: includes Unspin's log when Unspin is installed
+
 ### 2026.11.19.59052-beta
 - fix: the verifier counts the folders it will check from what's in RAM, not from the disk's last full read
 - ui: after a finished verify pass, Disks and Pools shows that pass's folder count and time
