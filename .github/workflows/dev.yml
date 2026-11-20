@@ -1,0 +1,38 @@
+name: Dev build
+
+# A test build of unwaked for the box, without a release: built like a beta
+# (same runner, test hooks on), kept as an artifact for a few days.
+# Version: <date>-dev-<commit>, so the diag shows which build runs.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or commit to build
+        default: beta
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Compile unwaked
+        run: |
+          sudo apt-get -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::Retries=5 install -y -qq meson ninja-build >/dev/null
+          VER="$(date -u +%Y.%m.%d)-dev-$(git rev-parse --short=7 HEAD)"
+          make build-daemon VERSION=$VER TEST_HOOKS=1
+          ./usr/local/sbin/unwaked --version
+          echo "$VER" > usr/local/sbin/unwaked.version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unwaked-dev
+          path: |
+            usr/local/sbin/unwaked
+            usr/local/sbin/unwaked.version
+          retention-days: 7
