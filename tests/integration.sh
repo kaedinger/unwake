@@ -369,8 +369,9 @@ rm -f "$T/run/test-spundown"; sleep 2.5
 last=$(grep -n 'disk2 spun up' "$T/unwake.log" | tail -1 | cut -d: -f1)
 msg=$(tail -n +"$last" "$T/unwake.log" | awk 'NR==1||/^    /{print;next}{exit}')
 echo "$msg" | sed 's/^/  log: /'
-check "spin-up names the rename on that disk" grep -q "rename media/movies/disk2-only/$f2 " <<<"$msg"
-check "but not the one on another disk" bash -c '! grep -q "disk1-only" <<<"$1"' _ "$msg"
+check "spin-up names the rename on that disk, marked as its folder" grep -q "rename media/movies/disk2-only/$f2 .*(folder on disk2)" <<<"$msg"
+# shfs looks every path up on every disk: the other one is listed too, without the mark
+check "the one on another disk is listed without that mark" bash -c 'grep "disk1-only" <<<"$1" | grep -qv "(folder on disk2)"' _ "$msg"
 
 say "in-place upgrade: same mount, open files, bind mounts, tree and events carry over"
 mkdir -p "$T/mnt/disk1/media/big"
