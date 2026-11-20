@@ -45,11 +45,15 @@ static void events_broken(const std::string& why) {
 static std::map<std::string, Mark> _marks;          // mount path -> mark
 static std::mutex _marks_mu;
 
-// FAN_CLOSE_NOWRITE: a read changes a file's atime without any other event (relatime: at
-// most once a day per file); re-reading the file after it was closed keeps atime current.
+// FAN_CLOSE_NOWRITE / FAN_CLOSE_WRITE: a read changes a file's atime without any other
+// event (relatime: at most once a day per file); re-reading the file after it was closed
+// keeps atime current. CLOSE_WRITE too: a file read through a read-write open closes as
+// one - every file read through Unwake's passthrough does (its backing open is read-write).
 // Merged events (several closes in one) are fine: only the latest atime matters.
+// Not seen: an atime-only change (utimensat with mtime omitted, touch -a) comes as
+// FAN_ACCESS, one per read() - too many to follow; the verifier catches those.
 static constexpr uint64_t EVENTS = FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO |
-                                   FAN_ATTRIB | FAN_MODIFY | FAN_CLOSE_NOWRITE | FAN_ONDIR;
+                                   FAN_ATTRIB | FAN_MODIFY | FAN_CLOSE_NOWRITE | FAN_CLOSE_WRITE | FAN_ONDIR;
 
 // Every mount point at or below a branch root, from mountinfo (no disk I/O).
 static std::vector<Mark> wanted_marks() {
@@ -339,7 +343,7 @@ static void handle(const struct fanotify_event_metadata* ev, std::map<std::strin
             apply_removed(b, rel, name, ev->mask & FAN_MOVED_FROM);
     }
     if (ev->mask & (FAN_ATTRIB | FAN_MODIFY)) restat_later(b, rel, name);
-    else if (ev->mask & FAN_CLOSE_NOWRITE) restat_later(b, rel, name, false);   // read: atime
+    else if (ev->mask & (FAN_CLOSE_NOWRITE | FAN_CLOSE_WRITE)) restat_later(b, rel, name, false);   // read: atime
     // a name came or went: the folder's own mtime and ctime changed, with no event of its own
     if ((ev->mask & (FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO)) && !rel.empty()) {
         auto slash = rel.rfind('/');

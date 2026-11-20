@@ -278,6 +278,14 @@ for _ in 1 2 3 4 5; do cat "$T/mnt/user/$F" >/dev/null; done    # several closes
 sleep 2
 check "a read updated the atime on the disk" test "$(stat -c %X "$T/mnt/disk1/$F")" -gt "$a0"
 check "the new atime from RAM, as on the disk" test "$(stat -c %X "$T/mnt/user/$F")" = "$(stat -c %X "$T/mnt/disk1/$F")"
+# a read through a read-write open closes as CLOSE_WRITE (as every passthrough read does)
+touch -a -d '3 days ago' "$T/mnt/disk1/$F"; sleep 2
+a0=$(stat -c %X "$T/mnt/disk1/$F")
+check "old atime from RAM before a read-write read" test "$(stat -c %X "$T/mnt/user/$F")" = "$a0"
+python3 -c 'import sys; f=open(sys.argv[1], "r+b"); f.read(); f.close()' "$T/mnt/disk1/$F"
+sleep 2
+check "a read-write read updated the atime on the disk" test "$(stat -c %X "$T/mnt/disk1/$F")" -gt "$a0"
+check "the new atime from RAM after a read-write read" test "$(stat -c %X "$T/mnt/user/$F")" = "$(stat -c %X "$T/mnt/disk1/$F")"
 # all disks read: a pool-only share passed to shfs is known not to be on disk2
 echo disk2 > "$T/run/test-spundown"; sleep 2.5
 n0=$(grep -c 'disk2 spun up' "$T/unwake.log")
