@@ -202,6 +202,30 @@ static void apply_added(int b, const std::string& rel_dir, const std::string& na
     d->gen++;
 }
 
+// A folder was deleted from disk b but stays on others: nothing below it is on b any more
+// (rmdir needs it empty). Deletes of its contents may have come as events we couldn't
+// resolve - the folder was gone by the time we read them (rm -r, the Mover emptying a
+// pool) - so take b off everything below it here. Lock held (exclusive).
+static void strip_branch(DirNode* d, int b, const std::string& rel) {
+    for (auto it = d->entries.begin(); it != d->entries.end();) {
+        Entry& e = it->second;
+        if (!(e.mask & bit(b))) { ++it; continue; }
+        std::string path = rel.empty() ? it->first : rel + "/" + it->first;
+        bool source = e.has_attr && (e.attr_from >= 0 ? e.attr_from == b : b == __builtin_ctzll(e.mask));
+        e.mask &= ~bit(b);
+        if (!e.mask) { auto name = it->first; ++it; tree_erase(d, name); continue; }
+        if (source) {
+            e.has_attr = false;
+            e.xattrs.reset();
+            int first = __builtin_ctzll(e.mask);
+            if (first < (int)g_branches.size() && g_branches[first]->up) restat_later(first, rel, it->first);
+        }
+        if (e.dir) strip_branch(e.dir.get(), b, path);
+        ++it;
+    }
+    d->gen++;
+}
+
 static void apply_removed(int b, const std::string& rel_dir, const std::string& name, bool moved) {
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(rel_dir);
@@ -212,6 +236,7 @@ static void apply_removed(int b, const std::string& rel_dir, const std::string& 
     bool source = e.has_attr && (e.attr_from >= 0 ? e.attr_from == b : e.mask && b == __builtin_ctzll(e.mask));
     e.mask &= ~bit(b);
     if (moved) drop_subtree(e);
+    else if (e.mask && e.dir) strip_branch(e.dir.get(), b, rel_dir.empty() ? name : rel_dir + "/" + name);
     d->gen++;
     if (e.mask) {                                     // still on another disk
         if (source) {

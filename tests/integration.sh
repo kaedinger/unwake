@@ -276,7 +276,11 @@ check "a file on the pool in a folder also on disk1 opens straight on the pool" 
 n0=$(grep -c "lookup miss $D/not-there" "$T/unwake.log")
 stat "$T/mnt/user/$D/not-there" 2>/dev/null
 check "a missing name there is answered from RAM" test "$(grep -c "lookup miss $D/not-there" "$T/unwake.log")" -eq "$n0"
-rm -r "$T/mnt/cache/media/deep"; sleep 1
+# rm -r is faster than the events: the folder is gone before its files' deletes can be
+# resolved - deleting it from the pool must take the pool off everything below it
+rm -r "$T/mnt/cache/media/deep"; sleep 2
+check "folder deleted from the pool (rm -r), still on disk1: nothing of the pool's copy left" test "$(ls -ln "$T/mnt/user/$D" | tail -n +2)" = "$(ls -ln "$T/ref/$D" | tail -n +2)"
+check "and its folders show disk1's attributes again" test "$(stat -c '%u %g %a' "$T/mnt/user/media/deep/a")" = "$(stat -c '%u %g %a' "$T/ref/media/deep/a")"
 # overflow: the pool was full, shfs put files of it on an array disk - then it goes through shfs
 mkdir -p "$T/mnt/disk2/docs"; echo overflow > "$T/mnt/disk2/docs/overflow.txt"; sleep 5
 check "pool-only share with a folder on an array disk: its files there are found" test "$(cat "$T/mnt/user/docs/overflow.txt" 2>&1)" = overflow
