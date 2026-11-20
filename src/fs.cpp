@@ -1177,7 +1177,8 @@ static void op_statfs(fuse_req_t req, fuse_ino_t ino) {
     if (!path_of(ino, rel)) return (void)fuse_reply_err(req, ENOENT);
     auto share = rel.substr(0, rel.find('/'));
     struct statvfs s;
-    if (!share.empty()) note_shfs("statfs", share);
+    // not recorded: emhttpd asks for every share every second while the web UI is open, and
+    // shfs answers from the disks' statfs (the disks the share may use), without lookups
     int r = share.empty() ? fstatvfs(g_shfs_fd, &s) : statvfs(proc_path(share).c_str(), &s);
     if (r != 0) return (void)fuse_reply_err(req, errno);
     fuse_reply_statfs(req, &s);
@@ -1349,8 +1350,8 @@ const struct fuse_lowlevel_ops* fs_ops() {
         struct fuse_lowlevel_ops o = {};
         o.init = op_init;
         o.lookup = Caller<op_lookup>::call;
-        o.forget = op_forget;
-        o.forget_multi = op_forget_multi;
+        o.forget = Caller<op_forget>::call;
+        o.forget_multi = Caller<op_forget_multi>::call;
         o.getattr = Caller<op_getattr>::call;
         o.setattr = Caller<op_setattr>::call;
         o.readlink = Caller<op_readlink>::call;
@@ -1363,20 +1364,20 @@ const struct fuse_lowlevel_ops* fs_ops() {
         o.rename = Caller<op_rename>::call;
         o.open = Caller<op_open>::call;
         o.create = Caller<op_create>::call;
-        o.read = op_read;
-        o.write_buf = op_write_buf;
-        o.flush = op_flush;
-        o.release = op_release;
-        o.fsync = op_fsync;
-        o.fallocate = op_fallocate;
-        o.lseek = op_lseek;
-        o.copy_file_range = op_copy_file_range;
+        o.read = Caller<op_read>::call;
+        o.write_buf = Caller<op_write_buf>::call;
+        o.flush = Caller<op_flush>::call;
+        o.release = Caller<op_release>::call;
+        o.fsync = Caller<op_fsync>::call;
+        o.fallocate = Caller<op_fallocate>::call;
+        o.lseek = Caller<op_lseek>::call;
+        o.copy_file_range = Caller<op_copy_file_range>::call;
         o.opendir = Caller<op_opendir>::call;
         o.readdir = Caller<op_readdir>::call;
         o.readdirplus = Caller<op_readdirplus>::call;
-        o.releasedir = op_releasedir;
-        o.fsyncdir = op_fsyncdir;
-        o.statfs = op_statfs;
+        o.releasedir = Caller<op_releasedir>::call;
+        o.fsyncdir = Caller<op_fsyncdir>::call;
+        o.statfs = Caller<op_statfs>::call;
         o.getxattr = Caller<op_getxattr>::call;
         o.listxattr = Caller<op_listxattr>::call;
         o.setxattr = Caller<op_setxattr>::call;
