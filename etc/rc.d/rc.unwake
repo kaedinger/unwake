@@ -248,6 +248,13 @@ unwake_diag() {
         tail -n 400 "$LOG_FILE" 2>/dev/null
         echo "-- verify log (last 400 lines)"
         tail -n 400 /var/log/unwake-verify.log 2>/dev/null
+        # Unspin names the process behind a spin-up that Unwake didn't pass on
+        if [ -f /var/log/unspin.log ]; then
+            echo "-- unspin log: spin-ups (last 200 lines)"
+            grep -iE 'spin|waiting' /var/log/unspin.log | tail -n 200
+            echo "-- unspin log (last 200 lines)"
+            tail -n 200 /var/log/unspin.log
+        fi
     } > "$out" 2>&1
     echo "Saved to $out"
 }
