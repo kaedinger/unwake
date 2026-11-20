@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.20.37401-beta">
+  <!ENTITY version   "2026.11.20.43799-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,6 +20,13 @@
 >
 
 <CHANGES>
+### 2026.11.20.43799-beta
+- fix: shares kept on an SSD pool (appdata, domains, system, ...) no longer wake array disks: Unwake answers their names from RAM and goes to the pool directly for what's in them, instead of through shfs, which looks every path up on every disk. If such a share gets files on an array disk (pool full), it goes through shfs until the Mover has moved them back
+- fix: atime of files read through Unwake is kept current (kernel passthrough closes them as written, that close wasn't followed)
+- fix: a share's own folder times stay current also for shares Unwake doesn't keep in RAM
+- log: the spin-up line lists every request passed to shfs, since shfs looks each one up on every disk; those for folders on that disk are marked
+- diag: in debug mode, change events and root listings are left out of the log section, so it covers more time
+
 ### 2026.11.20.37401-beta
 - fix: saving the settings page keeps settings it doesn't show (VERIFY, VERIFY_RATE, VERIFY_INTERVAL)
 - log: in debug mode, every request passed to shfs gets a line with the process that sent it; listings and missed lookups name the process too
