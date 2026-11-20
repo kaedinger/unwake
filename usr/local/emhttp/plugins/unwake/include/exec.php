@@ -62,6 +62,7 @@ case 'save':
     $new['LOG_MAX_SIZE_MB']  = $pint('LOG_MAX_SIZE_MB');
     $new['LOG_TRIM_SIZE_MB'] = $pint('LOG_TRIM_SIZE_MB');
     if ($new['LOG_TRIM_SIZE_MB'] >= $new['LOG_MAX_SIZE_MB']) $new['LOG_TRIM_SIZE_MB'] = max(1, intdiv($new['LOG_MAX_SIZE_MB'], 2));
+    $new += $prev;   // keys the page doesn't show (VERIFY_*, ...) are kept as they are
     save_cfg(UNWAKE_CFG, $new);
 
     $st = daemon_status();
