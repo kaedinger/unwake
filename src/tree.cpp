@@ -132,7 +132,7 @@ DirNode* tree_ensure(const std::string& rel, Mask present) {
 }
 
 // Is the slice of branch b of this directory known (present or known absent)?
-static bool known_on(const DirNode* d, Mask b) {
+bool tree_known_on(const DirNode* d, Mask b) {
     if (d->known & b) return true;
     for (const DirNode* c = d; c->parent; c = c->parent) {
         const Entry* e = c->self_entry();
@@ -151,7 +151,7 @@ bool tree_all_known(const DirNode* d) {
     for (int i = 0; i < MAX_BRANCHES; i++) {
         Mask b = bit(i);
         if (!(g_tree.all & b)) continue;
-        if (!known_on(d, b)) return false;
+        if (!tree_known_on(d, b)) return false;
     }
     return g_tree.all != 0;
 }

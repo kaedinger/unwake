@@ -853,16 +853,23 @@ static void op_rename(fuse_req_t req, fuse_ino_t parent, const char* name, fuse_
     fuse_reply_err(req, 0);
 }
 
-// The disk a file can be read from directly: it is on exactly one branch, and
-// every branch's slice of its directory is known (no copy hides elsewhere).
+// The disk a file can be opened on directly: the one shfs would open it on. shfs takes
+// the first branch holding it, in its order (pools, then disk1, disk2, ... - the order of
+// g_branches): that's the first one the tree knows it on, if every branch before that one
+// is known not to have it. A file on the first pool needs nothing else known.
 static int direct_branch(const std::string& rel) {
     if (!g_cfg.direct_reads || rel.empty() || !caching_for(rel) || !g_tree.per_branch) return -1;
     std::shared_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(dir_of(rel));
-    if (!d || !tree_all_known(d)) return -1;
+    if (!d) return -1;
     auto it = d->entries.find(base_of(rel));
-    if (it == d->entries.end() || __builtin_popcountll(it->second.mask) != 1) return -1;
-    return __builtin_ctzll(it->second.mask);
+    if (it == d->entries.end() || !it->second.mask || it->second.is_dir) return -1;
+    for (size_t i = 0; i < g_branches.size() && i < (size_t)MAX_BRANCHES; i++) {
+        Mask b = bit((int)i);
+        if (it->second.mask & b) return (int)i;
+        if (!tree_known_on(d, b)) return -1;     // might hold it, and come first
+    }
+    return -1;
 }
 
 static void opened(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi, int fd, bool create,
@@ -1170,6 +1177,7 @@ static void op_statfs(fuse_req_t req, fuse_ino_t ino) {
     if (!path_of(ino, rel)) return (void)fuse_reply_err(req, ENOENT);
     auto share = rel.substr(0, rel.find('/'));
     struct statvfs s;
+    if (!share.empty()) note_shfs("statfs", share);
     int r = share.empty() ? fstatvfs(g_shfs_fd, &s) : statvfs(proc_path(share).c_str(), &s);
     if (r != 0) return (void)fuse_reply_err(req, errno);
     fuse_reply_statfs(req, &s);

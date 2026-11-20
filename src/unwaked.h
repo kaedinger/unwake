@@ -152,6 +152,7 @@ DirNode* tree_ensure(const std::string& rel, Mask present);      // lock held (e
 std::shared_ptr<const Xattrs> read_xattrs(const std::string& path, int* err = nullptr);
 bool     tree_servable(const DirNode* d);                        // lock held
 bool     tree_all_known(const DirNode* d);                       // every branch slice known
+bool     tree_known_on(const DirNode* d, Mask b);                // branch b's slice known (present or absent)
 bool     tree_cacheable(const std::string& rel);                 // excluded shares
 void     tree_erase(DirNode* d, const std::string& name);        // lock held (exclusive)
 void     tree_count_add(const Entry& e, int sign);

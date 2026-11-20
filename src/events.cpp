@@ -186,6 +186,9 @@ static void apply_added(int b, const std::string& rel_dir, const std::string& na
     e.is_dir = S_ISDIR(st.st_mode);
     e.dtype = (uint8_t)IFTODT(st.st_mode);
     if (!created && !had_b && e.dir) drop_subtree(e);   // moved in with unknown contents
+    // made on this disk just now: its slice there is empty at birth, and every change in it
+    // comes as an event after this one (Mover, Unspin creating the folders of what they move)
+    if (created && !r.second && e.is_dir && e.dir) e.dir->known |= bit(b);
     if (created && r.second && e.is_dir && servable && !e.dir) {
         // a new, empty directory that exists nowhere else: complete from birth
         auto nd = std::make_unique<DirNode>();

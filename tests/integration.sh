@@ -266,6 +266,17 @@ check "pool-only share: attributes as through shfs" test "$(stat -c '%s %a %Y' "
 check "pool-only share: location from the pool" test "$(getfattr --absolute-names --only-values -n system.LOCATION "$T/mnt/user/docs/notes/n6.txt")" = cache
 check "share name from RAM: mtime after a change in its top folder" bash -c "touch '$T/mnt/cache/docs/top-new'; sleep 2; test \"\$(stat -c %Y '$T/mnt/user/docs')\" = \"\$(stat -c %Y '$T/ref/docs')\""
 rm -f "$T/mnt/cache/docs/top-new"
+# a folder that exists on disk1 gets made on the pool too (Unspin promoting a file, the Mover):
+# its new slice there is empty at birth, so known; and a file on the pool opens straight
+# there - shfs looks at the pools first
+D=media/deep/a/b/c/d/e/f/g/disk1-1
+mkdir "$T/mnt/cache/$D"; echo promoted > "$T/mnt/cache/$D/promoted.mkv"; sleep 2
+cat "$T/mnt/user/$D/promoted.mkv" >/dev/null
+check "a file on the pool in a folder also on disk1 opens straight on the pool" grep -q "to cache: open (direct) $D/promoted.mkv" "$T/unwake.log"
+n0=$(grep -c "lookup miss $D/not-there" "$T/unwake.log")
+stat "$T/mnt/user/$D/not-there" 2>/dev/null
+check "a missing name there is answered from RAM" test "$(grep -c "lookup miss $D/not-there" "$T/unwake.log")" -eq "$n0"
+rm -r "$T/mnt/cache/$D"; sleep 1
 # overflow: the pool was full, shfs put files of it on an array disk - then it goes through shfs
 mkdir -p "$T/mnt/disk2/docs"; echo overflow > "$T/mnt/disk2/docs/overflow.txt"; sleep 5
 check "pool-only share with a folder on an array disk: its files there are found" test "$(cat "$T/mnt/user/docs/overflow.txt" 2>&1)" = overflow
