@@ -236,6 +236,7 @@ void note_shfs(const char* op, const std::string& rel, const std::string& to = {
                Mask mask = 0);
 // requests that may have reached branch b: writes from the last 2 minutes (the journal
 // reaches the disk up to a minute later), everything else from the last 30 s
-std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& others);
+std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& others,
+                                  std::vector<std::string>* other_lines = nullptr);
 // the last requests passed to shfs for names in dir (of the last 512 requests, any age)
 std::vector<std::string> shfs_recent(const std::string& dir, size_t max);

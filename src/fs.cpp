@@ -89,8 +89,18 @@ static std::string caller_name(pid_t tid) {
     return who;
 }
 
+// " [process]" for a debug line about the request on this thread
+static std::string by() {
+    if (!g_debug) return {};
+    auto w = caller_name(t_caller);
+    return w.empty() ? std::string() : " [" + w + "]";
+}
+
 void note_shfs(const char* op, const std::string& rel, const std::string& to, const std::string& note, Mask mask) {
     std::string who = g_debug ? caller_name(t_caller) : std::string();
+    if (g_debug)
+        log_debug("to shfs: " + std::string(op) + " " + (rel.empty() ? "/" : rel) + (to.empty() ? "" : " -> " + to) +
+                  (note.empty() ? "" : " " + note) + (who.empty() ? "" : " [" + who + "]"));
     std::lock_guard<std::mutex> l(_req_mu);
     ShfsReq r{now_ms(), op, rel, to, note, mask, std::move(who)};
     if (_reqs.size() < REQ_RING) _reqs.push_back(std::move(r));
@@ -128,7 +138,7 @@ static Mask disks_of_dir(const std::string& dir) {
 
 static std::string dir_of(const std::string& rel);
 
-std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& others) {
+std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& others, std::vector<std::string>* other_lines) {
     std::vector<ShfsReq> v;
     auto now = now_ms();
     {
@@ -138,7 +148,7 @@ std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& othe
     }
     std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.ms < b.ms; });
     Mask want = g_tree.per_branch && b >= 0 ? bit(b) : ~Mask(0);
-    std::vector<const ShfsReq*> hit;
+    std::vector<const ShfsReq*> hit, other;
     others = 0;
     for (auto& r : v) {
         Mask m = r.mask;
@@ -148,22 +158,26 @@ std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& othe
             if (!r.to.empty()) m |= disks_of_dir(dir_of(r.to));
         }
         if (m & want) hit.push_back(&r);
-        else if (r.ms >= now - REQ_WINDOW) others++;
+        else if (r.ms >= now - REQ_WINDOW) { others++; other.push_back(&r); }
     }
     total = hit.size();
-    std::vector<std::string> out;
-    for (size_t i = hit.size() > max ? hit.size() - max : 0; i < hit.size(); i++) {
-        auto& r = *hit[i];
-        char t[32];
-        time_t s = r.ms / 1000;
-        struct tm tm;
-        localtime_r(&s, &tm);
-        strftime(t, sizeof t, "%H:%M:%S", &tm);
-        out.push_back(std::string(t) + " " + r.op + " " + (r.rel.empty() ? "/" : r.rel) +
-                      (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note) +
-                      (r.who.empty() ? "" : " [" + r.who + "]"));
-    }
-    return out;
+    auto lines = [&](const std::vector<const ShfsReq*>& rs) {
+        std::vector<std::string> out;
+        for (size_t i = rs.size() > max ? rs.size() - max : 0; i < rs.size(); i++) {
+            auto& r = *rs[i];
+            char t[32];
+            time_t s = r.ms / 1000;
+            struct tm tm;
+            localtime_r(&s, &tm);
+            strftime(t, sizeof t, "%H:%M:%S", &tm);
+            out.push_back(std::string(t) + " " + r.op + " " + (r.rel.empty() ? "/" : r.rel) +
+                          (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note) +
+                          (r.who.empty() ? "" : " [" + r.who + "]"));
+        }
+        return out;
+    };
+    if (other_lines) *other_lines = lines(other);
+    return lines(hit);
 }
 
 std::vector<std::string> shfs_recent(const std::string& dir, size_t max) {
@@ -576,7 +590,7 @@ static void op_lookup(fuse_req_t req, fuse_ino_t parent, const char* name) {
     if (c == 0) { g_stats.lookup_neg++; return reply_negative(req); }
     g_stats.lookup_miss++;
     note_shfs("lookup", rel);
-    if (caching_for(rel)) log_debug("lookup miss " + rel);   // shares not in RAM: no line per request
+    if (caching_for(rel)) log_debug("lookup miss " + rel + by());   // shares not in RAM: no line per request
     auto gen0 = cache_gen(prel);
     struct stat st;
     if (fstatat(g_shfs_fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) {
@@ -999,11 +1013,11 @@ static void op_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
             gen0 = tree_ensure(rel, 0)->gen;
         }
     }
-    if (hit) { g_stats.readdir_hit++; log_debug("readdir hit " + (rel.empty() ? "/" : rel)); }
+    if (hit) { g_stats.readdir_hit++; log_debug("readdir hit " + (rel.empty() ? "/" : rel) + by()); }
     else {
         g_stats.readdir_miss++;
         note_shfs("readdir", rel);
-        if (rel.empty() || caching_for(rel)) log_debug("readdir miss " + (rel.empty() ? "/" : rel));
+        if (rel.empty() || caching_for(rel)) log_debug("readdir miss " + (rel.empty() ? "/" : rel) + by());
         int fd = openat(g_shfs_fd, rp(rel), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         DIR* dp = fd >= 0 ? fdopendir(fd) : nullptr;
         if (!dp) {

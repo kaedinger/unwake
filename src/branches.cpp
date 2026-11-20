@@ -140,10 +140,15 @@ static void spin_changed(Branch& b, bool up) {
     int idx = -1;
     for (size_t i = 0; i < g_branches.size(); i++) if (g_branches[i].get() == &b) idx = (int)i;
     size_t total = 0, others = 0;
-    auto reqs = shfs_for(idx, 12, total, others);
+    std::vector<std::string> olines;
+    auto reqs = shfs_for(idx, 12, total, others, &olines);
     std::string other = others ? " (" + std::to_string(others) + " for other disks only)" : "";
     if (reqs.empty()) {
-        log_info(b.name + " spun up - Unwake passed nothing for it to shfs in the 30 s before (writes: 2 min)" + other);
+        // shfs checks a path on every disk, so these may have reached it too
+        std::string list;
+        for (auto& r : olines) list += "\n    " + r + " (other disks)";
+        log_info(b.name + " spun up - Unwake passed nothing for it to shfs in the 30 s before (writes: 2 min)" + other +
+                 (olines.empty() ? "" : (others > olines.size() ? ", the last " + std::to_string(olines.size()) : std::string()) + ":") + list);
         return;
     }
     std::string list;
