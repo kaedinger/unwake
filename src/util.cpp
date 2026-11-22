@@ -163,10 +163,10 @@ std::vector<std::string> load_config() {
     g_cfg.verify = false;
     yesno("VERIFY", g_cfg.verify);
     {
-        long r = 4;
+        long r = Config::VERIFY_RATE_DEFAULT;
         number("VERIFY_RATE", r, 1);
         g_cfg.verify_rate = r;
-        long iv = 43200;
+        long iv = Config::VERIFY_INTERVAL_DEFAULT;
         number("VERIFY_INTERVAL", iv, 0);
         g_cfg.verify_interval = iv;
     }

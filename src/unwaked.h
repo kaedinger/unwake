@@ -66,8 +66,9 @@ struct Config {
     std::shared_ptr<const std::vector<std::string>> uncached_paths = std::make_shared<std::vector<std::string>>();
     std::string verify_log   = "/var/log/unwake-verify.log";
     std::atomic<bool> verify{false};        // VERIFY=yes (a beta build verifies anyway)
-    std::atomic<long> verify_rate{4};       // VERIFY_RATE: folders per second and disk
-    std::atomic<long> verify_interval{43200};   // VERIFY_INTERVAL: seconds from the end of a pass to the next
+    static constexpr long VERIFY_RATE_DEFAULT = 50, VERIFY_INTERVAL_DEFAULT = 86400;
+    std::atomic<long> verify_rate{VERIFY_RATE_DEFAULT};           // VERIFY_RATE: folders per second and disk
+    std::atomic<long> verify_interval{VERIFY_INTERVAL_DEFAULT};   // VERIFY_INTERVAL: seconds from the end of a pass to the next
     long        log_max_mb   = 16;
     long        log_trim_mb  = 2;
 };

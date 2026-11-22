@@ -1,7 +1,7 @@
 // verify.cpp - the verifier: compares the tree with the disks, slowly, while they spin
 //
 // One thread per disk or pool, at idle I/O priority. It walks the folders the tree
-// knows for that disk, a few per second (VERIFY_RATE), only while the disk spins
+// knows for that disk, up to 50 per second (VERIFY_RATE), only while the disk spins
 // anyway and its folders were read once (harvested) - and on a spinning disk only while
 // something else uses it too, so it never keeps a disk from spinning down - and compares each folder's
 // slice in RAM with the disk: names, type, mode, owner, links, size, the three

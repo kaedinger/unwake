@@ -20,6 +20,9 @@
 >
 
 <CHANGES>
+### next
+- feat: the verifier checks up to 50 folders per second and disk (was 4), and starts a disk's next pass a day after its last one (was 12 hours)
+
 ### 2026.11.22.41090-beta
 - fix: an in-place upgrade also stops watching for changes the new version no longer follows
 - fix: an in-place upgrade makes Unwake watch for the changes the new version follows; after upgrades from versions before 2026.11.19.54162-beta, atime after a read stayed old (the verifier repaired it)
