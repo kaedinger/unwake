@@ -8,6 +8,18 @@ const UNWAKE_DEFAULTS = '/usr/local/emhttp/plugins/unwake/unwake.cfg.default';
 const UNWAKE_LOG      = '/var/log/unwake.log';
 const UNWAKE_RUN      = '/var/run/unwake';
 const UNWAKE_RC       = '/etc/rc.d/rc.unwake';
+const UNWAKE_PLG      = '/boot/config/plugins/unwake.plg';
+const UNWAKE_MNT      = '/mnt/user';
+const DISKS_INI       = '/var/local/emhttp/disks.ini';
+const SHARES_DIR      = '/boot/config/shares';
+
+// release channels: the stable .plg is a release asset; releases are immutable, so the
+// rolling beta .plg lives on the `channel` branch
+const UNWAKE_REPO     = 'https://github.com/kaedinger/unwake';
+const CHANNEL_URLS    = [
+    'stable' => UNWAKE_REPO . '/releases/latest/download/unwake.plg',
+    'beta'   => 'https://raw.githubusercontent.com/kaedinger/unwake/channel/unwake.plg',
+];
 
 function load_cfg($path) {
     $cfg = [];
@@ -39,6 +51,9 @@ const CHOICES = [
 
 function is_debug($cfg) { return ($cfg['LOG_LEVEL'] ?? '') === 'debug'; }
 
+// a comma-separated setting (EXCLUDED_SHARES, INCLUDED_SHARES) as a list
+function cfg_list($cfg, $key) { return array_values(array_filter(array_map('trim', explode(',', $cfg[$key] ?? '')))); }
+
 function pid_alive($pid) { return $pid > 0 && file_exists("/proc/$pid"); }
 
 // The daemon's own report, or null when it isn't running
@@ -63,7 +78,7 @@ function user_mount_type() {
     $t = '';
     foreach (@file('/proc/self/mountinfo') ?: [] as $line) {
         $f = explode(' ', $line);
-        if (($f[4] ?? '') !== '/mnt/user') continue;
+        if (($f[4] ?? '') !== UNWAKE_MNT) continue;
         $sep = array_search('-', $f);
         if ($sep !== false) $t = $f[$sep + 1] ?? '';
     }
@@ -89,16 +104,29 @@ function vfs_pressure() {
     return ($v === false || !is_numeric(trim($v))) ? null : (int)trim($v);
 }
 
-// installed version, from the .plg on the flash
-function installed_version() {
-    $plg = @file_get_contents('/boot/config/plugins/unwake.plg');
-    return ($plg && preg_match('/<!ENTITY\s+version\s+"([^"]+)"/', $plg, $m)) ? $m[1] : 'unknown';
+// version, pluginURL and CHANGES of a .plg file, or null
+function plg_info($file) {
+    if (!is_file($file)) return null;
+    $xml = @simplexml_load_file($file, 'SimpleXMLElement', LIBXML_NOENT);
+    if (!$xml || !isset($xml['version'])) return null;
+    return [
+        'version' => (string)$xml['version'],
+        'url'     => (string)$xml['pluginURL'],
+        'changes' => trim((string)$xml->CHANGES),
+    ];
+}
+
+// the installed version and the channel it updates from (the .plg on the flash)
+function installed() {
+    $info = plg_info(UNWAKE_PLG);
+    if (!$info) return ['version' => 'unknown', 'channel' => 'stable'];
+    return ['version' => $info['version'], 'channel' => $info['url'] === CHANNEL_URLS['beta'] ? 'beta' : 'stable'];
 }
 
 // Pools without spinning disks: name => true (from disks.ini)
 function ssd_pools() {
     $rot = [];
-    foreach (@parse_ini_file('/var/local/emhttp/disks.ini', true) ?: [] as $d) {
+    foreach (@parse_ini_file(DISKS_INI, true) ?: [] as $d) {
         if (($d['type'] ?? '') !== 'Cache' || !isset($d['name'])) continue;
         $pool = rtrim($d['name'], '0123456789');
         $rot[$pool] = ($rot[$pool] ?? false) || ($d['rotational'] ?? '1') !== '0';
@@ -114,9 +142,9 @@ function load_unraid_shares() {
     $out = [];
     $ssd = ssd_pools();
     $mounted = user_mount_type() !== '';
-    foreach (glob('/boot/config/shares/*.cfg') ?: [] as $f) {
+    foreach (glob(SHARES_DIR . '/*.cfg') ?: [] as $f) {
         $name = basename($f, '.cfg');
-        if ($mounted && !is_dir("/mnt/user/$name")) continue;   // deleted share
+        if ($mounted && !is_dir(UNWAKE_MNT . "/$name")) continue;   // deleted share
         $c = load_cfg($f);
         $use  = $c['shareUseCache'] ?? 'no';
         $pool = ($c['shareCachePool'] ?? '') ?: 'cache';
@@ -138,9 +166,8 @@ function pool_only_text($name, $st) {
 
 // is a share cached, by the settings and the pool-only rule
 function share_cached($name, $info, $cfg) {
-    $list = fn($k) => array_filter(array_map('trim', explode(',', $cfg[$k] ?? '')));
-    if (in_array($name, $list('EXCLUDED_SHARES'), true)) return false;
-    if (in_array($name, $list('INCLUDED_SHARES'), true)) return true;
+    if (in_array($name, cfg_list($cfg, 'EXCLUDED_SHARES'), true)) return false;
+    if (in_array($name, cfg_list($cfg, 'INCLUDED_SHARES'), true)) return true;
     return !$info['pool_only'];
 }
 
@@ -178,26 +205,31 @@ function spin_mark($spinning, $ssd = false) {
 // Detached instances that still serve something (stopped or restarted while in use)
 function older_text($older) {
     if (!$older) return '';
-    $when = implode(', ', array_map(fn($t) => $t ? date(date('Y-m-d') === date('Y-m-d', $t) ? 'H:i' : 'M j H:i', $t) : '?', $older));
+    $when = implode(', ', array_map(fn($t) => $t ? fmt_when($t) : '?', $older));
     return (count($older) === 1 ? 'An older Unwake is' : count($older) . ' older Unwake instances are') .
            ' still in use (stopped ' . $when . '). Each one exits once nothing uses it any more.';
 }
 
-// Status sections for the page and the poll: summary lines and detail tables (HTML)
+// Status sections for the page and the poll: summary lines and detail tables (HTML).
+// Colors: the page's CSS variables (Unwake.php)
 function status_view($st) {
-    $v = ['status' => '', 'color' => '#f87171', 'cache' => '', 'cache_detail' => '', 'hits' => '', 'hits_detail' => '',
-          'disks' => '', 'version' => $st['version'] ?? '', 'older' => older_text($st['older'] ?? [])];
+    $v = ['status' => '', 'color' => 'var(--uw-bad)', 'cache' => '', 'cache_detail' => '', 'hits' => '', 'hits_detail' => '',
+          'disks' => '', 'verify' => '', 'verify_detail' => '', 'pool_only' => [],
+          'toggle' => $st['running'] ? 'Stop Unwake' : 'Start Unwake',
+          'version' => $st['version'] ?? '', 'older' => older_text($st['older'] ?? [])];
+    foreach (load_unraid_shares() as $name => $info)
+        if ($info['pool_only']) $v['pool_only'][$name] = pool_only_text($name, $st);
     $mt = user_mount_type();
     if (!$st['running']) {
         $v['status'] = $mt === '' ? 'Stopped (array not started)' : 'Stopped';
         return $v;
     }
     $state = $st['state'] ?? 'starting';
-    if ($state === 'running' && $mt === 'fuse.unwake') { $v['status'] = 'Running'; $v['color'] = '#4ade80'; }
-    elseif ($state === 'draining') { $v['status'] = 'Detached - serving open files until they are closed'; $v['color'] = '#facc15'; }
-    elseif ($state === 'running') { $v['status'] = 'Running, but not on top of /mnt/user'; $v['color'] = '#facc15'; }
-    else { $v['status'] = ucfirst($state); $v['color'] = '#facc15'; }
-    if (empty($st['caching']) && $state === 'running') { $v['status'] .= ' (pass-through only, caching off - see the log)'; $v['color'] = '#facc15'; }
+    if ($state === 'running' && $mt === 'fuse.unwake') { $v['status'] = 'Running'; $v['color'] = 'var(--uw-ok)'; }
+    elseif ($state === 'draining') { $v['status'] = 'Detached - serving open files until they are closed'; $v['color'] = 'var(--uw-warn)'; }
+    elseif ($state === 'running') { $v['status'] = 'Running, but not on top of /mnt/user'; $v['color'] = 'var(--uw-warn)'; }
+    else { $v['status'] = ucfirst($state); $v['color'] = 'var(--uw-warn)'; }
+    if (empty($st['caching']) && $state === 'running') { $v['status'] .= ' (pass-through only, caching off - see the log)'; $v['color'] = 'var(--uw-warn)'; }
 
     $v['cache'] = fmt_count($st['dirs'] ?? 0) . ' folders, ' . fmt_count($st['entries'] ?? 0) . ' names, ' .
                   fmt_bytes(($st['rss_kb'] ?? 0) * 1024) . ' RAM';
@@ -243,8 +275,6 @@ function status_view($st) {
     $v['disks'] = $cards;
 
     // the verifier (always on in betas): its own section, one line per disk, the current pass only
-    $v['verify'] = '';
-    $v['verify_detail'] = '';
     if (!empty($st['verifying'])) {
         $diffs = function ($f, $r, $p) {
             if (!$f) return '0 differences';
@@ -271,14 +301,15 @@ function status_view($st) {
                 $busy = true;
                 $line = "Verifying $name: waiting" . ($c ? ', ' . number_format($c) . ' of ' . fmt_count($t) . " folders checked, $d" : '...');
             }
-            $v['verify_detail'] .= '<div class="uw-col-text"' . ($state === 'done' ? ' style="color:#4ade80;"' : '') . '>' . $line . '</div>';
+            $v['verify_detail'] .= '<div class="uw-col-text"' . ($state === 'done' ? ' style="color:var(--uw-ok);"' : '') . '>' . $line . '</div>';
         }
         $v['verify'] = ($busy ? 'Verifying, ' : 'Verify complete, ') . $diffs($f, $r, $p);
     }
-    $v['pool_only'] = [];
-    foreach (array_keys($st['pool_only'] ?? []) as $name) $v['pool_only'][$name] = pool_only_text($name, $st);
     return $v;
 }
+
+// The log box: the newest entries, more of them in debug mode
+function log_text($cfg) { return log_tail(is_debug($cfg) ? 1000 : 200) ?: 'No log entries yet.'; }
 
 // The newest $entries log entries, exact repeats in a row folded into one:
 // "<first time> [DEBUG] readdir hit x (25x until <last time>)". An entry is a line with

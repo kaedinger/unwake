@@ -4,37 +4,11 @@
  * Which channel is installed, and the newest version on each channel.
  */
 
-const UNWAKE_REPO      = 'https://github.com/kaedinger/unwake';
-const UNWAKE_PLG       = '/boot/config/plugins/unwake.plg';
+require_once __DIR__ . '/cfg.php';
+
 const UNWAKE_CH_CACHE  = '/tmp/unwake-channel';
 const UNWAKE_CH_TTL    = 3600;
-
-function channel_urls() {
-    return [
-        'stable' => UNWAKE_REPO . '/releases/latest/download/unwake.plg',
-        // releases are immutable, so the rolling beta .plg lives on the `channel` branch
-        'beta'   => 'https://raw.githubusercontent.com/kaedinger/unwake/channel/unwake.plg',
-    ];
-}
-
-// version, pluginURL and CHANGES of a .plg file, or null
-function channel_plg_info($file) {
-    if (!is_file($file)) return null;
-    $xml = @simplexml_load_file($file, 'SimpleXMLElement', LIBXML_NOENT);
-    if (!$xml || !isset($xml['version'])) return null;
-    return [
-        'version' => (string)$xml['version'],
-        'url'     => (string)$xml['pluginURL'],
-        'changes' => trim((string)$xml->CHANGES),
-    ];
-}
-
-function channel_installed() {
-    $info = channel_plg_info(UNWAKE_PLG);
-    if (!$info) return ['version' => 'unknown', 'channel' => 'stable'];
-    $channel = ($info['url'] === channel_urls()['beta']) ? 'beta' : 'stable';
-    return ['version' => $info['version'], 'channel' => $channel];
-}
+const PLUGINS_TMP      = '/tmp/plugins';   // Unraid's: its update check's copy, release notes for its popup
 
 // newest .plg of a channel, cached for UNWAKE_CH_TTL; a stale copy is used when GitHub is unreachable.
 // Also refreshed once Unraid's own update check (Plugins page) ran after the cache was filled,
@@ -43,20 +17,20 @@ function channel_latest($ch, $refresh) {
     @mkdir(UNWAKE_CH_CACHE, 0755, true);
     $file  = UNWAKE_CH_CACHE . "/$ch.plg";
     $fresh = is_file($file) && time() - filemtime($file) < UNWAKE_CH_TTL &&
-             @filemtime('/tmp/plugins/unwake.plg') <= filemtime($file);
+             @filemtime(PLUGINS_TMP . '/unwake.plg') <= filemtime($file);
     if ($refresh || !$fresh) {
         $tmp = "$file.tmp";
         $rc  = 1;
-        exec('curl -fsSL --max-time 10 -o ' . escapeshellarg($tmp) . ' ' . escapeshellarg(channel_urls()[$ch]) . ' 2>/dev/null', $out, $rc);
-        if ($rc === 0 && channel_plg_info($tmp)) rename($tmp, $file); else @unlink($tmp);
+        exec('curl -fsSL --max-time 10 -o ' . escapeshellarg($tmp) . ' ' . escapeshellarg(CHANNEL_URLS[$ch]) . ' 2>/dev/null', $out, $rc);
+        if ($rc === 0 && plg_info($tmp)) rename($tmp, $file); else @unlink($tmp);
     }
-    $info = channel_plg_info($file);
+    $info = plg_info($file);
     if (!$info) return null;
     // release notes for Unraid's own popup (showchanges only reads .txt files under /tmp/plugins)
-    @mkdir('/tmp/plugins', 0755, true);
-    $txt = "/tmp/plugins/unwake-$ch.txt";
+    @mkdir(PLUGINS_TMP, 0755, true);
+    $txt = PLUGINS_TMP . "/unwake-$ch.txt";
     file_put_contents($txt, $info['changes']);
-    return ['version' => $info['version'], 'url' => channel_urls()[$ch], 'notes' => $txt];
+    return ['version' => $info['version'], 'url' => CHANNEL_URLS[$ch], 'notes' => $txt];
 }
 
 header('Content-Type: application/json');
@@ -64,7 +38,7 @@ $action = $_REQUEST['action'] ?? '';
 if ($action === 'versions') {
     $refresh = !empty($_GET['refresh']);
     echo json_encode([
-        'installed' => channel_installed(),
+        'installed' => installed(),
         'stable'    => channel_latest('stable', $refresh),
         'beta'      => channel_latest('beta', $refresh),
     ]);

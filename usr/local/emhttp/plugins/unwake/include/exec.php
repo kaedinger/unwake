@@ -14,15 +14,16 @@ function save_cfg($path, $cfg) {
     file_put_contents($path, $body);
 }
 
-function rc($arg) {
+// rc.unwake: [succeeded, its output]
+function rc($arg, $glue = ' ') {
     exec(UNWAKE_RC . ' ' . $arg . ' 2>&1', $out, $rc);
-    return [$rc === 0, trim(implode(' ', $out))];
+    return [$rc === 0, trim(implode($glue, $out))];
 }
 
 function poll_result($cfg) {
     $st = daemon_status();
     return ['running' => $st['running'], 'view' => status_view($st), 'cache_dirs' => cache_dirs_running(), 'pressure' => vfs_pressure(),
-            'log' => log_tail(is_debug($cfg) ? 1000 : 200)];
+            'log' => log_text($cfg)];
 }
 
 $action = $_POST['action'] ?? '';
@@ -42,12 +43,11 @@ case 'save':
     foreach (array_keys(CHOICES) as $k) $new[$k] = $choice($k);
     // SSD-pool-only shares are decided by unwaked (no checkbox); entries made for them
     // by hand in unwake.cfg are kept. Other shares: unticked = excluded.
-    $list = fn($k) => array_filter(array_map('trim', explode(',', $cfg[$k] ?? '')));
     $excluded = $included = [];
     foreach (load_unraid_shares() as $name => $info) {
         if ($info['pool_only']) {
-            if (in_array($name, $list('EXCLUDED_SHARES'), true)) $excluded[] = $name;
-            if (in_array($name, $list('INCLUDED_SHARES'), true)) $included[] = $name;
+            if (in_array($name, cfg_list($cfg, 'EXCLUDED_SHARES'), true)) $excluded[] = $name;
+            if (in_array($name, cfg_list($cfg, 'INCLUDED_SHARES'), true)) $included[] = $name;
             continue;
         }
         if (($_POST['SHARE_CACHE_' . $name] ?? '1') === '0') $excluded[] = $name;
@@ -96,8 +96,7 @@ case 'set_pressure':
     break;
 
 case 'users':
-    exec(UNWAKE_RC . ' users 2>&1', $out);
-    echo json_encode(['ok' => true, 'text' => implode("\n", $out)]);
+    echo json_encode(['ok' => true, 'text' => rc('users', "\n")[1]]);
     break;
 
 case 'clear_log':

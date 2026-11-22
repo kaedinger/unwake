@@ -20,16 +20,15 @@ function default_note($key, $defaults) {
 
 $defaults  = load_cfg(UNWAKE_DEFAULTS);
 $c         = settings();
-$version   = installed_version();
-$plg       = @file_get_contents('/boot/config/plugins/unwake.plg') ?: '';
-$channel   = strpos($plg, 'raw.githubusercontent.com/kaedinger/unwake/channel/unwake.plg') !== false ? 'beta' : 'stable';
+$installed = installed();
+$version   = $installed['version'];
 $st        = daemon_status();
 $view      = status_view($st);
 $cache_dirs = cache_dirs_running();
 $pressure  = vfs_pressure();
 $shares    = load_unraid_shares();
 
-$log_lines = log_tail(is_debug($c) ? 1000 : 200);
+$log_lines = log_text($c);
 ?>
 
 <style>
@@ -40,8 +39,8 @@ $log_lines = log_tail(is_debug($c) ? 1000 : 200);
 }
 @keyframes uw-spin { to { transform: rotate(360deg); } }
 
-/* Width of the settings column, as Unraid's form elements */
-:root { --uw-col: 400px; }
+/* Width of the settings column, as Unraid's form elements; status colors (also set from cfg.php and the script) */
+:root { --uw-col: 400px; --uw-ok: #4ade80; --uw-warn: #facc15; --uw-bad: #f87171; }
 
 .uw-muted { color: #888; }
 dt.uw-has-help { cursor: help; user-select: none; }
@@ -81,14 +80,14 @@ dt.uw-has-help { cursor: help; user-select: none; }
   display: inline-block; width: 8px; height: 8px; box-sizing: border-box;
   border: 1px solid #888; border-radius: 50%; vertical-align: middle; position: relative; top: -1px;
 }
-.uw-spin.on { background: #4ade80; border-color: #4ade80; }
+.uw-spin.on { background: var(--uw-ok); border-color: var(--uw-ok); }
 
 /* Shares */
 dt.uw-share-name { text-align: right; font-weight: normal; }
 .uw-share-row { display: grid; grid-template-columns: 7.5em 1fr; align-items: center; gap: 10px; width: var(--uw-col); max-width: 100%; }
 .uw-share-row label { white-space: nowrap; }
 
-.uw-warn { color: #facc15; }
+.uw-warn { color: var(--uw-warn); }
 .uw-col-text { width: var(--uw-col); max-width: 100%; }
 .uw-bordered { border: 1px solid rgba(128,128,128,0.35); border-radius: 4px; }
 
@@ -116,7 +115,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
   <dd>
     <strong id="uw-status" style="color:<?= $view['color'] ?>"><?= htmlspecialchars($view['status']) ?></strong>
     &nbsp;&nbsp;
-    <button type="button" id="uw-toggle-btn" onclick="uwToggle()"><?= $st['running'] ? 'Stop Unwake' : 'Start Unwake' ?></button>
+    <button type="button" id="uw-toggle-btn" onclick="uwToggle()"><?= $view['toggle'] ?></button>
     <div id="uw-older-row" style="margin-top:6px;width:var(--uw-col);max-width:100%;<?= $view['older'] ? '' : 'display:none;' ?>">
       <span class="uw-warn" id="uw-older"><?= htmlspecialchars($view['older']) ?></span>
       <button type="button" onclick="uwUsers(this)" style="display:inline;margin:4px 0 0 6px;padding:2px 10px;min-width:0;">Who uses them?</button>
@@ -237,7 +236,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
   <dd class="uw-fold-shares" style="display:none;">
 <?php if ($info['pool_only']): ?>
     <div class="uw-muted uw-pool-only" data-share="<?= htmlspecialchars($name) ?>" style="width:var(--uw-col);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-      title="<?= htmlspecialchars($info['comment']) ?>"><?= htmlspecialchars(pool_only_text($name, $st)) ?></div>
+      title="<?= htmlspecialchars($info['comment']) ?>"><?= htmlspecialchars($view['pool_only'][$name] ?? '') ?></div>
 <?php else: ?>
     <div class="uw-share-row">
       <label><input type="checkbox" class="uw-share-cb" name="SHARE_CACHE_<?= htmlspecialchars($name) ?>" <?= share_cached($name, $info, $c) ? 'checked' : '' ?>> <span class="uw-share-on"<?= share_cached($name, $info, $c) ? '' : ' style="display:none;"' ?>>keep in RAM</span></label>
@@ -260,14 +259,14 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
   <input type="button" value="Clear Log" onclick="uwClearLog()">
 </div>
 <textarea id="log-box" class="uw-bordered" readonly rows="18"
-  style="width:100%;font-family:monospace;font-size:0.8em;resize:vertical;box-sizing:border-box;appearance:none;-webkit-appearance:none;"><?= htmlspecialchars($log_lines) ?: 'No log entries yet.' ?></textarea>
+  style="width:100%;font-family:monospace;font-size:0.8em;resize:vertical;box-sizing:border-box;appearance:none;-webkit-appearance:none;"><?= htmlspecialchars($log_lines) ?></textarea>
 
 <div class="uw-footer">
   Made with ♥ by
   <img src="https://github.com/kaedinger.png" alt="kaedinger" class="uw-footer-avatar">
   <a href="https://kaedinger.de" target="_blank" rel="noopener">kaedinger</a>
   <span class="uw-footer-sep">·</span>
-  <a href="https://github.com/kaedinger/unwake" target="_blank" rel="noopener">GitHub / Issues</a>
+  <a href="<?= UNWAKE_REPO ?>" target="_blank" rel="noopener">GitHub / Issues</a>
   <span class="uw-footer-sep">·</span>
   <a href="#" onclick="return false;" title="Support forum thread follows with the first public release">Support forum</a>
   <span class="uw-footer-sep">·</span>
@@ -286,7 +285,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
 // Release channel switch: STABLE vX (i) [switch] BETA vY (i) [Switch/Update] - as in Unspin
 (function () {
   var CH  = '/plugins/unwake/include/channel.php';
-  var ins = { version: <?= json_encode($version) ?>, channel: <?= json_encode($channel) ?> };
+  var ins = <?= json_encode($installed) ?>;
   var dat = null;
   var sw  = $('#uw-ch-switch'), go = $('#uw-ch-go');
 
@@ -374,19 +373,23 @@ var UW_INSTALLED = <?= json_encode($version) ?>;
   });
 
   function showMsg(text, ok) {
-    msgEl.innerHTML = '<span style="color:' + (ok ? '#4ade80' : '#f87171') + '">' + String(text).replace(/</g, '&lt;') + '</span>';
+    msgEl.innerHTML = '<span style="color:var(' + (ok ? '--uw-ok' : '--uw-bad') + ')">' + String(text).replace(/</g, '&lt;') + '</span>';
   }
   function post(data, cb) {
     $.post(EXEC, data, cb, 'json').fail(function (xhr) { showMsg('Error: ' + xhr.statusText, false); });
   }
-  function setBusy(btn, text) { btn.disabled = true; btn.innerHTML = '<span class="uw-spinner"></span>' + text; }
+  // a button busy with a spinner, and back to its own label
+  function setBusy(btn, text) {
+    if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+    btn.disabled = true; btn.innerHTML = '<span class="uw-spinner"></span>' + text;
+  }
+  function setIdle(btn, label) { btn.disabled = false; btn.textContent = label || btn.dataset.label; delete btn.dataset.label; }
 
   function apply(r) {
     running = r.running;
     var v = r.view, s = document.getElementById('uw-status');
     s.textContent = v.status; s.style.color = v.color;
-    var btn = document.getElementById('uw-toggle-btn');
-    btn.disabled = false; btn.innerHTML = running ? 'Stop Unwake' : 'Start Unwake';
+    setIdle(document.getElementById('uw-toggle-btn'), v.toggle);
     document.getElementById('uw-cache-line').textContent = v.cache || '-';
     document.getElementById('uw-cache-detail').innerHTML = v.cache_detail;
     document.getElementById('uw-hits-line').textContent = v.hits || '-';
@@ -396,8 +399,7 @@ var UW_INSTALLED = <?= json_encode($version) ?>;
     document.getElementById('uw-verify-line').textContent = v.verify || '-';
     document.getElementById('uw-verify-detail').innerHTML = v.verify_detail || '';
     document.querySelectorAll('.uw-pool-only').forEach(function (el) {
-      var t = v.pool_only && v.pool_only[el.dataset.share];
-      el.textContent = t || 'SSD pool only - checked against the array disks while Unwake runs';
+      if (v.pool_only[el.dataset.share]) el.textContent = v.pool_only[el.dataset.share];
     });
     document.getElementById('uw-older-row').style.display = v.older ? '' : 'none';
     document.getElementById('uw-older').textContent = v.older;
@@ -414,7 +416,7 @@ var UW_INSTALLED = <?= json_encode($version) ?>;
     if (lowp) document.getElementById('uw-pressure').textContent = r.pressure;
     if (lb && r.log !== undefined) {
       var atBottom = lb.scrollTop + lb.clientHeight >= lb.scrollHeight - 10;
-      lb.value = r.log || 'No log entries yet.';
+      lb.value = r.log;
       if (atBottom) lb.scrollTop = lb.scrollHeight;
     }
   }
@@ -424,7 +426,7 @@ var UW_INSTALLED = <?= json_encode($version) ?>;
     var pre = document.getElementById('uw-users');
     setBusy(btn, 'Looking...');
     post({ action: 'users' }, function (r) {
-      btn.disabled = false; btn.innerHTML = 'Who uses them?';
+      setIdle(btn);
       pre.textContent = r.text || 'Nothing found.';
       pre.style.display = '';
     });
@@ -451,17 +453,17 @@ var UW_INSTALLED = <?= json_encode($version) ?>;
   }
   updateSharesSummary();
 
-  var fields = ['SERVICE', 'HARVEST', 'DATA_PATH', 'RETURN_RAM', 'LOG_LEVEL', 'LOG_MAX_SIZE_MB', 'LOG_TRIM_SIZE_MB'];
+  var settingEls = document.querySelectorAll('[id^="uw_"]');   // the settings: id uw_KEY, name KEY
   window.uwSave = function () {
     setBusy(applyBtn, 'Applying…');
     var data = { action: 'save' };
-    fields.forEach(function (f) { var el = document.getElementById('uw_' + f); if (el) data[f] = el.value; });
+    settingEls.forEach(function (el) { data[el.name] = el.value; });
     document.querySelectorAll('input.uw-share-cb').forEach(function (el) { data[el.name] = el.checked ? '1' : '0'; });
     post(data, function (r) {
       showMsg(r.message, r.ok);
-      if (r.cfg) fields.forEach(function (f) { var el = document.getElementById('uw_' + f); if (el && r.cfg[f] !== undefined) el.value = r.cfg[f]; });
+      if (r.cfg) settingEls.forEach(function (el) { if (r.cfg[el.name] !== undefined) el.value = r.cfg[el.name]; });
       apply(r);
-      applyBtn.disabled = true; applyBtn.innerHTML = 'Apply';
+      setIdle(applyBtn); applyBtn.disabled = true;
     });
   };
 
