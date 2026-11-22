@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.22.41090-beta">
+  <!ENTITY version   "2026.11.22.45114-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,7 +20,7 @@
 >
 
 <CHANGES>
-### next
+### 2026.11.22.45114-beta
 - ui: the settings page lets Unwake check what it saves: an invalid value becomes the default and the message says so; which shares are SSD-pool-only and the numbers in the help texts come from Unwake too
 - log: durations without a zero part (2m, not 2m 0s), also in the spin-up lines
 - fix: the settings page no longer logs PHP warnings while Unwake is stopped
