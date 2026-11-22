@@ -273,8 +273,9 @@ function status_view($st) {
     $v['hits'] = $all ? round(100 * $hit / $all, 1) . '% of ' . fmt_count($all) . ' requests answered from RAM' : 'No requests yet';
     $v['hits_detail'] = $tbl;
 
-    // stables verify too, but only betas show it (Verify section, "verified" in Disks and Pools)
-    $beta = substr($st['version'] ?? '', -5) === '-beta';
+    // stables verify too, but only the beta channel shows it (Verify section, "verified" in Disks and
+    // Pools): a beta, or a stable the beta channel passed on because beta was identical to it
+    $beta = substr($st['version'] ?? '', -5) === '-beta' || installed()['channel'] === 'beta';
     $cards = '';
     foreach ($st['branches'] ?? [] as $b) {
         $ssd = empty($b['rotational']);
@@ -290,7 +291,7 @@ function status_view($st) {
     }
     $v['disks'] = $cards;
 
-    // the verifier (always on in betas, shown in betas only): its own section, one line per disk, the current pass only
+    // the verifier (always on in betas, shown on the beta channel only): its own section, one line per disk, the current pass only
     if ($beta && !empty($st['verifying'])) {
         $diffs = function ($f, $r, $p) {
             if (!$f) return '0 differences';

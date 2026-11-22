@@ -28,7 +28,7 @@ LOG_TRIM_SIZE_MB="2"
 # Not on the settings page. The verifier compares the folders in RAM with the disks and
 # repairs what differs (VERIFY="no" turns it off; betas verify regardless): up to
 # VERIFY_RATE folders per second and disk, a disk's next pass VERIFY_INTERVAL seconds
-# after its last one ended. The settings page shows it in betas only.
+# after its last one ended. The settings page shows it on the beta channel only.
 VERIFY="yes"
 VERIFY_RATE="50"
 VERIFY_INTERVAL="86400"

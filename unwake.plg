@@ -20,7 +20,8 @@
 >
 
 <CHANGES>
-### 2026.11.22.66875
+### next
+- ui: the Verify section shows on the beta channel, also while it offers the same version as stable
 - ui: the settings page links the support thread in the Unraid forum
 
 ### 2026.11.22.64600
