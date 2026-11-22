@@ -68,6 +68,12 @@ static uint64_t mark_mask() {
     return EVENTS;
 }
 
+// Every event a notification group can watch: what an upgrade takes off a mark that this
+// version doesn't follow (an older one watched it, or a later one, when going back)
+static constexpr uint64_t WATCHABLE = FAN_ACCESS | FAN_MODIFY | FAN_ATTRIB | FAN_CLOSE_WRITE | FAN_CLOSE_NOWRITE |
+                                      FAN_OPEN | FAN_OPEN_EXEC | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_CREATE |
+                                      FAN_DELETE | FAN_DELETE_SELF | FAN_MOVE_SELF | FAN_ONDIR;
+
 // Every mount point at or below a branch root, from mountinfo (no disk I/O).
 static std::vector<Mark> wanted_marks() {
     std::vector<Mark> out;
@@ -487,20 +493,22 @@ static std::string hex(uint64_t v) { char x[20]; snprintf(x, sizeof x, "0x%llx",
 
 // After an in-place upgrade: the marks came over as the version that set them made them,
 // with the events that one watched (a version from before reads were followed watched no
-// FAN_CLOSE_*). Watch this version's events on each of them; ADD adds to what a mark has.
+// FAN_CLOSE_*). Make each of them watch exactly this version's events: ADD adds to what a
+// mark has, REMOVE takes off what this version doesn't follow (one event per read(), say).
 void events_apply_mask() {
     if (_fan < 0) return;
-    bool missing = false;
-    for (auto m : mark_masks()) if ((m & EVENTS) != EVENTS) missing = true;
+    bool differ = false;
+    for (auto m : mark_masks()) if ((m & WATCHABLE) != EVENTS) differ = true;
     std::lock_guard<std::mutex> l(_marks_mu);
     int failed = 0;
     for (auto& kv : _marks)
-        if (fanotify_mark(_fan, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, EVENTS, AT_FDCWD, kv.first.c_str()) != 0) {
+        if (fanotify_mark(_fan, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, EVENTS, AT_FDCWD, kv.first.c_str()) != 0 ||
+            fanotify_mark(_fan, FAN_MARK_REMOVE | FAN_MARK_FILESYSTEM, WATCHABLE & ~EVENTS, AT_FDCWD, kv.first.c_str()) != 0) {
             log_warn("Upgrade: can't change the events watched on " + kv.first + " (" + strerror(errno) + ")");
             failed++;
         }
-    if (missing && !failed)
-        log_info("Upgrade: the disks and pools were watched for the events of an older version - now for this one's (" +
+    if (differ && !failed)
+        log_info("Upgrade: the disks and pools were watched for the events of another version - now for this one's (" +
                  hex(EVENTS) + ")");
 }
 
