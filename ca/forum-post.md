@@ -20,7 +20,9 @@ Unwake runs `unwaked`, a FUSE daemon that sits **on top of** `/mnt/user` - shfs 
 
 **Keeping it current.** Unwake watches every disk and pool with **fanotify**. Every change - through Unwake, straight on `/mnt/diskN`, by the Mover, Unbalanced, a container or Unspin - updates the tree right away. Nothing is re-read on a timer.
 
-**What stays with shfs.** Shares that live on an SSD pool only can't wake a disk, so they're passed to shfs untouched. You can untick any share to pass it to shfs as well.
+**What stays out of RAM.** Shares that live on an SSD pool only can't wake a disk, so they aren't kept in RAM; Unwake sends their requests straight to that pool, not through shfs, which would look every path up on every disk. If an array disk still holds folders of such a share, it's kept in RAM like the others. You can untick any share to pass it to shfs.
+
+**Checked against the disks.** A verifier compares the folders in RAM with the disks, slowly and only while a disk spins anyway and something else uses it, so it never keeps a disk awake. Whatever differs is repaired and written to `/var/log/unwake-verify.log`. `VERIFY="no"` in `unwake.cfg` turns it off.
 
 ### Safe by design
 
@@ -46,14 +48,30 @@ One thing worth knowing: the kernel takes **one backing file per file**, shared 
 - **Event-driven** - no polling, no re-scans
 - **All Unraid file systems** - XFS, btrfs, ZFS (datasets are followed as they come and go), on array disks and pools
 - **In-place updates** - same mount, same open files; containers and VMs don't notice
-- **Shares in RAM** - every share listed with a tick box
+- **Shares in RAM** - every share listed with a tick box; SSD-pool-only shares are detected and go straight to their pool
 - **Spin-up diagnostics** - when a disk spins up, the log lists what Unwake passed to shfs that could have reached that disk
-- **Diagnostics in one file** - `rc.unwake diag`
-- **Live log viewer**
+- **Verifier** - the folders in RAM are checked against the disks while they spin, differences repaired and logged
+- **Diagnostics in one file** - `rc.unwake diag`, and `rc.unwake users` names whatever still uses an older instance
+- **Live log viewer** - repeated entries folded
+- **Stable and beta channel** - switch between them on the settings page
 
 ## Screenshots
 
-*(coming)*
+Status and settings:
+
+![Status and settings](https://raw.githubusercontent.com/kaedinger/unwake/main/images/scr1_main.png)
+
+Cache details and requests served from RAM:
+
+![Cache details](https://raw.githubusercontent.com/kaedinger/unwake/main/images/scr_statistics.png)
+
+Shares in RAM:
+
+![Shares in RAM](https://raw.githubusercontent.com/kaedinger/unwake/main/images/scr_shares.png)
+
+Activity log, an in-place update, stable and beta channel:
+
+![Activity log and update channel](https://raw.githubusercontent.com/kaedinger/unwake/main/images/scr2_log_stable_beta.png)
 
 ## Installation
 
@@ -67,10 +85,17 @@ plugin install https://github.com/kaedinger/unwake/releases/latest/download/unwa
 
 Then turn off Dynamix Cache Directories under *Settings → Folder Caching*, and enable Unwake under *Settings → Utilities → Unwake*. If Cache Directories left `vfs_cache_pressure` at a low value, the settings page offers to set it back to 100.
 
+**Stable and beta channel.** New features come out as betas first. The switch at the bottom right of the settings page shows the newest version on each channel and moves you between them; settings stay when you switch. Every stable release reaches the beta channel too. On the beta channel, CA doesn't list Unwake under *Installed Apps* and Fix Common Problems says it's *not known to Community Applications* - both only know the stable version; nothing is wrong. To install the beta directly:
+
+```
+plugin install https://raw.githubusercontent.com/kaedinger/unwake/channel/unwake.plg
+```
+
 ## Requirements
 
-- Unraid 7.3.2 or newer
+- Unraid 7.2.0 or newer (tested with 7.3.2)
 - RAM: about 270 bytes per file and folder name for the tree (1.4 million names: about 380 MB), more during and after a backup - see below
+- Linux 6.9+ for kernel passthrough (Unraid 7.2 has 6.12); without it, file data goes through the daemon
 - No external dependencies - single C++ binary
 
 **RAM after a backup.** Besides the tree, Unwake keeps an entry for every name the kernel currently holds an inode for, and a backup or media scan through `/mnt/user` touches nearly all of them. When the kernel lets go of them, *Return Freed RAM* (on by default) hands the freed memory back to the system a few minutes later. With it off, Unwake keeps that memory for the next backup - a few milliseconds saved a night, but the night's peak held all day; the settings page then shows how much is kept. On my server (1.4 million names): 376 MB before the nightly backup, 864 MB the next morning with it off, 479 MB seconds after switching it on.
