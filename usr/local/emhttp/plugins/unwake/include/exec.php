@@ -35,14 +35,11 @@ case 'save':
     $defs = load_cfg(UNWAKE_DEFAULTS);
     $prev = load_cfg(UNWAKE_CFG);
     $p    = fn($k)        => $prev[$k] ?? $defs[$k] ?? '';
-    $enum = fn($k, $vals) => in_array($_POST[$k] ?? '', $vals, true) ? $_POST[$k] : $p($k);
+    $choice = fn($k) => array_key_exists($_POST[$k] ?? '', CHOICES[$k]) ? $_POST[$k] : $p($k);
     $pint = fn($k, $m = 1) => isset($_POST[$k]) && ($v = intval($_POST[$k])) >= $m ? $v : intval($p($k));
 
     $new = [];
-    $new['SERVICE']   = $enum('SERVICE', ['enabled', 'disabled']);
-    $new['HARVEST']   = $enum('HARVEST', ['yes', 'no']);
-    $new['DATA_PATH'] = $enum('DATA_PATH', ['direct', 'shfs']);
-    $new['RETURN_RAM'] = $enum('RETURN_RAM', ['yes', 'no']);
+    foreach (array_keys(CHOICES) as $k) $new[$k] = $choice($k);
     // SSD-pool-only shares are decided by unwaked (no checkbox); entries made for them
     // by hand in unwake.cfg are kept. Other shares: unticked = excluded.
     $list = fn($k) => array_filter(array_map('trim', explode(',', $cfg[$k] ?? '')));
@@ -58,7 +55,6 @@ case 'save':
     sort($excluded); sort($included);
     $new['EXCLUDED_SHARES']  = implode(',', $excluded);
     $new['INCLUDED_SHARES']  = implode(',', $included);
-    $new['LOG_LEVEL']        = $enum('LOG_LEVEL', ['info', 'debug']);
     $new['LOG_MAX_SIZE_MB']  = $pint('LOG_MAX_SIZE_MB');
     $new['LOG_TRIM_SIZE_MB'] = $pint('LOG_TRIM_SIZE_MB');
     if ($new['LOG_TRIM_SIZE_MB'] >= $new['LOG_MAX_SIZE_MB']) $new['LOG_TRIM_SIZE_MB'] = max(1, intdiv($new['LOG_MAX_SIZE_MB'], 2));

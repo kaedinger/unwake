@@ -21,6 +21,7 @@
 
 <CHANGES>
 ### next
+- feat: every setting has its default in one place, unwake.cfg.default, which Unwake, its settings page and rc.unwake read under the saved settings; an invalid saved value is reported and the default used; the hidden verifier settings are listed there too, and the Verify help shows the values in use
 - feat: the verifier checks up to 50 folders per second and disk (was 4), and starts a disk's next pass a day after its last one (was 12 hours)
 
 ### 2026.11.22.41090-beta
@@ -149,18 +150,16 @@ installpkg /boot/config/plugins/&name;/&name;.txz
 
 <!--
   =====================================================
-  Post-install: config defaults, start if enabled
+  Post-install: start if enabled
   =====================================================
 -->
 <FILE Run="/bin/bash">
 <INLINE>
+# no unwake.cfg yet: every setting has its default (unwake.cfg.default)
 mkdir -p /boot/config/plugins/unwake /var/run/unwake
-CFG=/boot/config/plugins/unwake/unwake.cfg
-[ -f "$CFG" ] || cp /usr/local/emhttp/plugins/unwake/unwake.cfg.default "$CFG"
 touch /var/log/unwake.log
 chmod +x /usr/local/sbin/unwaked /etc/rc.d/rc.unwake /usr/local/emhttp/plugins/unwake/event/* 2>/dev/null
 
-source "$CFG"
 if /etc/rc.d/rc.unwake status >/dev/null 2>/dev/null; then
   # same mount, same open files: containers, VMs and SMB clients carry on
   OUT=$(/etc/rc.d/rc.unwake upgrade); RC=$?
@@ -172,8 +171,8 @@ if /etc/rc.d/rc.unwake status >/dev/null 2>/dev/null; then
     echo "Unwake: $OUT"
     echo "Unwake: the running version keeps running - try again on the settings page, or restart Unwake."
   fi
-elif [ "$SERVICE" = "enabled" ]; then
-  /etc/rc.d/rc.unwake start
+else
+  /etc/rc.d/rc.unwake start --if-enabled
 fi
 
 if pgrep -f '[c]ache_dirs' >/dev/null 2>/dev/null; then

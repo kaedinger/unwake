@@ -1,6 +1,6 @@
 #!/bin/bash
 # rc.unwake - Unwake service controller
-# Usage: /etc/rc.d/rc.unwake {start|stop|stop --array|restart [--fresh]|upgrade|status|reload|users|diag}
+# Usage: /etc/rc.d/rc.unwake {start [--if-enabled]|stop [--array]|restart [--fresh]|upgrade|status|reload|users|diag}
 #
 # unwaked mounts itself on top of /mnt/user (shfs stays mounted underneath).
 # stop detaches it: new access goes to shfs at once, and the old unwaked keeps
@@ -13,6 +13,8 @@ RUN=${UNWAKE_RUN:-/var/run/unwake}
 PID_FILE=$RUN/unwaked.pid
 LOG_FILE=${UNWAKE_LOG:-/var/log/unwake.log}
 MNT=${UNWAKE_MNT:-/mnt/user}
+DEFAULTS=/usr/local/emhttp/plugins/unwake/unwake.cfg.default
+CFG=/boot/config/plugins/unwake/unwake.cfg
 
 mkdir -p "$RUN"
 
@@ -31,7 +33,11 @@ tidy() {
     alive "$(sup_pid)" || rm -f "$PID_FILE"
 }
 
+# SERVICE="enabled": the saved settings over the defaults, as unwaked reads them
+enabled() { ( source "$DEFAULTS" 2>/dev/null; source "$CFG" 2>/dev/null; [ "$SERVICE" = enabled ] ); }
+
 unwake_start() {
+    [ "$1" = "--if-enabled" ] && ! enabled && return 0
     tidy
     if alive "$(sup_pid)"; then
         echo "unwaked is already running (PID $(sup_pid))."
@@ -230,7 +236,7 @@ unwake_diag() {
         echo "-- what still uses a detached unwake"
         unwake_users
         echo "-- settings"
-        cat /boot/config/plugins/unwake/unwake.cfg 2>/dev/null | grep -v '^#'
+        grep -v '^#' "$CFG" 2>/dev/null
         echo "-- mounts at and below /mnt"
         grep -E ' /mnt/' /proc/self/mountinfo | awk '{s=$0; sub(/.* - /, "", s); print $5, s}'
         echo "fuse connections: $(ls /sys/fs/fuse/connections 2>/dev/null | tr '\n' ' ')"
@@ -269,10 +275,10 @@ case "$1" in
     diag)    unwake_diag ;;
     users)   unwake_users ;;
     upgrade) unwake_upgrade ;;
-    start)   unwake_start ;;
+    start)   unwake_start "$2" ;;
     stop)    unwake_stop "$2" ;;
     restart) unwake_restart "$2" ;;
     status)  unwake_status ;;
     reload)  alive "$(sup_pid)" && kill -HUP "$(sup_pid)" && echo "Settings reloaded." ;;
-    *)       echo "Usage: $0 {start|stop [--array]|restart [--fresh]|upgrade|status|reload|users|diag}"; exit 1 ;;
+    *)       echo "Usage: $0 {start [--if-enabled]|stop [--array]|restart [--fresh]|upgrade|status|reload|users|diag}"; exit 1 ;;
 esac

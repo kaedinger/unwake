@@ -12,6 +12,7 @@
 set -uo pipefail
 
 BIN="$(realpath "${1:-usr/local/sbin/unwaked}")"
+DEFAULTS="$(realpath usr/local/emhttp/plugins/unwake/unwake.cfg.default)"
 T=/tmp/uwtest
 FAILS=0
 PASSES=0
@@ -80,7 +81,7 @@ EOF
 
 start_unwake() {
     rm -f "$T/run/ready"
-    "$BIN" --mountpoint "$T/mnt/user" --config "$T/unwake.cfg" --log "$T/unwake.log" --verify-log "$T/verify.log" --run-dir "$T/run" \
+    "$BIN" --mountpoint "$T/mnt/user" --config "$T/unwake.cfg" --defaults "$DEFAULTS" --log "$T/unwake.log" --verify-log "$T/verify.log" --run-dir "$T/run" \
            --shares-dir "$T/shares" --branch "cache=$T/mnt/cache,ssd" --branch "disk1=$T/mnt/disk1" --branch "disk2=$T/mnt/disk2" &
     SUP=$!
     for _ in $(seq 1 50); do [ -f "$T/run/ready" ] && break; sleep 0.2; done
@@ -344,7 +345,7 @@ check "a full pass on every disk" test "$(vall)" = True
 check "no differences after all the tests above" test ! -s "$T/verify.log"
 [ -s "$T/verify.log" ] && sed 's/^/  verify: /' "$T/verify.log" | head -40
 sleep 2
-check "the next pass waits (12 hours)" test "$(stat_json "sum(b['verify']['checked'] for b in d['branches'])")" -gt 0 -a "$(vall)" = True
+check "the next pass waits (VERIFY_INTERVAL from unwake.cfg.default: a day)" test "$(stat_json "sum(b['verify']['checked'] for b in d['branches'])")" -gt 0 -a "$(vall)" = True
 # written under another name and renamed: every verify thread reads test-plant and deletes it,
 # one could catch it empty between the shell's create and write
 printf 'ghost disk1 media/shows/planted-ghost\ndrop disk2 media/shows/ep-disk2-17.mkv\nsize disk1 media/shows/ep-disk1-5.mkv\n' > "$T/run/.test-plant"
@@ -362,6 +363,19 @@ check "this pass on the status: 3 found, 3 repaired, none pending" test "$(vsum 
 stat_json "[(b['name'], b['verify']) for b in d['branches']]" | sed 's/^/  verify status: /'
 rm -f "$T/run/test-verify-now"
 sed -i '/^VERIFY/d' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
+
+say "settings: unwake.cfg over unwake.cfg.default"
+n0=$(grep -c 'Settings reloaded' "$T/unwake.log")
+sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL="loud"/' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
+check "an invalid saved value: reported, the default used" \
+    grep -q 'LOG_LEVEL="loud" is not debug or info - using the default "info"' "$T/unwake.log"
+check "and the other settings still reloaded" test "$(grep -c 'Settings reloaded' "$T/unwake.log")" -gt "$n0"
+sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL="debug"/' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
+mkdir -p "$T/run2"
+"$BIN" --no-supervisor --mountpoint "$T/mnt/user" --config "$T/unwake.cfg" --defaults "$T/no-such-file" \
+       --log "$T/nodefaults.log" --run-dir "$T/run2" --shares-dir "$T/shares" --branch "disk1=$T/mnt/disk1"; rc=$?
+check "without unwake.cfg.default it doesn't start (exit $rc)" bash -c "[ $rc -ne 0 ] && grep -q 'no-such-file is missing or empty' '$T/nodefaults.log'"
+check "and the running one is untouched" same_listing
 
 say "spun-down disk is never read"
 kill "$SUP"; wait "$SUP" 2>/dev/null

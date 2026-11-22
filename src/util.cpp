@@ -1,7 +1,9 @@
 // util.cpp - logging, config and small helpers
 #include "unwaked.h"
 
+#include <algorithm>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <cstring>
 #include <sys/stat.h>
@@ -118,8 +120,9 @@ int64_t now_ms() {
 }
 
 // ---------------------------------------------------------------------------
-// Config: unwake.cfg, KEY="value" lines as written by the settings page.
-// Unknown or invalid values keep the previous value and are reported.
+// Config: KEY="value" lines - unwake.cfg.default (shipped: every setting and its default)
+// with unwake.cfg (as the settings page saved it) over it. An invalid saved value is
+// reported and the default used.
 // ---------------------------------------------------------------------------
 static std::unordered_map<std::string, std::string> read_kv(const std::string& file) {
     std::unordered_map<std::string, std::string> kv;
@@ -137,50 +140,90 @@ static std::unordered_map<std::string, std::string> read_kv(const std::string& f
     return kv;
 }
 
-std::vector<std::string> load_config() {
-    std::vector<std::string> warn;
-    auto kv = read_kv(g_cfg.cfg_file);
-    auto yesno = [&](const char* key, std::atomic<bool>& out) {
-        auto it = kv.find(key);
-        if (it == kv.end()) return;
-        if (it->second == "yes") out = true;
-        else if (it->second == "no") out = false;
-        else warn.push_back(std::string(key) + "=\"" + it->second + "\" is not yes or no - kept " + (out ? "yes" : "no"));
-    };
-    auto number = [&](const char* key, long& out, long min) {
-        auto it = kv.find(key);
-        if (it == kv.end()) return;
-        char* end = nullptr;
-        long v = strtol(it->second.c_str(), &end, 10);
-        if (it->second.empty() || *end || v < min)
-            warn.push_back(std::string(key) + "=\"" + it->second + "\" is not a valid number - kept " + std::to_string(out));
-        else out = v;
-    };
-    if (kv.count("LOG_LEVEL")) g_cfg.debug = kv["LOG_LEVEL"] == "debug";
-    yesno("HARVEST", g_cfg.harvest);
-    yesno("RETURN_RAM", g_cfg.return_ram);
-    // not on the settings page (betas verify anyway): a missing key means the default
-    g_cfg.verify = false;
-    yesno("VERIFY", g_cfg.verify);
-    {
-        long r = Config::VERIFY_RATE_DEFAULT;
-        number("VERIFY_RATE", r, 1);
-        g_cfg.verify_rate = r;
-        long iv = Config::VERIFY_INTERVAL_DEFAULT;
-        number("VERIFY_INTERVAL", iv, 0);
-        g_cfg.verify_interval = iv;
+namespace {
+using KV = std::unordered_map<std::string, std::string>;
+
+// One setting: the saved value if it is valid, else the default. parse: value -> optional result
+struct Settings {
+    const KV& saved;
+    const KV& defs;
+    const std::string& defaults_file;
+    std::vector<std::string>& warn;
+    bool ok = true;
+
+    template <class Parse>
+    auto get(const char* key, const char* valid, Parse parse) -> typename decltype(parse(""))::value_type {
+        auto d = defs.find(key);
+        auto def = d == defs.end() ? decltype(parse(""))() : parse(d->second);
+        if (!def) {
+            warn.push_back(std::string(key) + " has no valid default in " + defaults_file);
+            ok = false;
+            return {};
+        }
+        auto s = saved.find(key);
+        if (s == saved.end()) return *def;
+        if (auto v = parse(s->second)) return *v;
+        warn.push_back(std::string(key) + "=\"" + s->second + "\" is not " + valid + " - using the default \"" + d->second + "\"");
+        return *def;
     }
-    if (kv.count("DATA_PATH")) {
-        if (kv["DATA_PATH"] == "direct") g_cfg.direct_reads = true;
-        else if (kv["DATA_PATH"] == "shfs") g_cfg.direct_reads = false;
-        else warn.push_back("DATA_PATH=\"" + kv["DATA_PATH"] + "\" is not direct or shfs - kept " +
-                            (g_cfg.direct_reads ? "direct" : "shfs"));
+    bool yesno(const char* key) {
+        return get(key, "yes or no", [](const std::string& v) {
+            return v == "yes" ? std::optional<bool>(true) : v == "no" ? std::optional<bool>(false) : std::nullopt;
+        });
     }
-    g_cfg.excluded_explicit = split(kv["EXCLUDED_SHARES"], ',');
-    g_cfg.included_explicit = split(kv["INCLUDED_SHARES"], ',');
-    number("LOG_MAX_SIZE_MB", g_cfg.log_max_mb, 1);
-    number("LOG_TRIM_SIZE_MB", g_cfg.log_trim_mb, 1);
-    if (g_cfg.log_trim_mb >= g_cfg.log_max_mb) g_cfg.log_trim_mb = g_cfg.log_max_mb / 2 ? g_cfg.log_max_mb / 2 : 1;
-    g_debug = g_cfg.debug;
-    return warn;
+    // true for the first of the two values, false for the second
+    bool either(const char* key, const char* first, const char* second) {
+        std::string valid = std::string(first) + " or " + second;
+        return get(key, valid.c_str(), [&](const std::string& v) {
+            return v == first ? std::optional<bool>(true) : v == second ? std::optional<bool>(false) : std::nullopt;
+        });
+    }
+    long number(const char* key, long min) {
+        std::string valid = "a number of at least " + std::to_string(min);
+        return get(key, valid.c_str(), [min](const std::string& v) {
+            char* end = nullptr;
+            long n = strtol(v.c_str(), &end, 10);
+            return !v.empty() && !*end && n >= min ? std::optional<long>(n) : std::nullopt;
+        });
+    }
+    std::vector<std::string> list(const char* key) {
+        return get(key, "", [](const std::string& v) { return std::optional<std::vector<std::string>>(split(v, ',')); });
+    }
+};
+}   // namespace
+
+bool load_config(std::vector<std::string>& warn) {
+    KV defs = read_kv(g_cfg.defaults_file);
+    if (defs.empty()) {
+        warn.push_back(g_cfg.defaults_file + " is missing or empty - reinstall the plugin");
+        return false;
+    }
+    KV saved = read_kv(g_cfg.cfg_file);
+    Settings s{saved, defs, g_cfg.defaults_file, warn};
+    bool debug       = s.either("LOG_LEVEL", "debug", "info");
+    bool harvest     = s.yesno("HARVEST");
+    bool return_ram  = s.yesno("RETURN_RAM");
+    bool verify      = s.yesno("VERIFY");
+    long verify_rate = s.number("VERIFY_RATE", 1);
+    long verify_iv   = s.number("VERIFY_INTERVAL", 0);
+    bool direct      = s.either("DATA_PATH", "direct", "shfs");
+    auto excluded    = s.list("EXCLUDED_SHARES");
+    auto included    = s.list("INCLUDED_SHARES");
+    long log_max     = s.number("LOG_MAX_SIZE_MB", 1);
+    long log_trim    = s.number("LOG_TRIM_SIZE_MB", 1);
+    if (!s.ok) return false;
+    if (log_trim >= log_max) log_trim = std::max(1L, log_max / 2);   // as the settings page saves it
+    g_cfg.debug = debug;
+    g_cfg.harvest = harvest;
+    g_cfg.return_ram = return_ram;
+    g_cfg.verify = verify;
+    g_cfg.verify_rate = verify_rate;
+    g_cfg.verify_interval = verify_iv;
+    g_cfg.direct_reads = direct;
+    g_cfg.excluded_explicit = excluded;
+    g_cfg.included_explicit = included;
+    g_cfg.log_max_mb = log_max;
+    g_cfg.log_trim_mb = log_trim;
+    g_debug = debug;
+    return true;
 }

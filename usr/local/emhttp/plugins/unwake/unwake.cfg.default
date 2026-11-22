@@ -1,5 +1,5 @@
-# Unwake Configuration
-# Managed by the Unwake plugin settings page
+# Unwake settings: every one and its default. Unwake, its settings page and rc.unwake read
+# this file first, then /boot/config/plugins/unwake/unwake.cfg (what the page saved) over it.
 
 # Put Unwake on top of /mnt/user when the array starts (enabled/disabled)
 SERVICE="disabled"
@@ -24,3 +24,11 @@ RETURN_RAM="yes"
 LOG_LEVEL="info"
 LOG_MAX_SIZE_MB="16"
 LOG_TRIM_SIZE_MB="2"
+
+# Not on the settings page. The verifier compares the folders in RAM with the disks and
+# repairs what differs (betas always; a stable version with VERIFY="yes"): up to
+# VERIFY_RATE folders per second and disk, a disk's next pass VERIFY_INTERVAL seconds
+# after its last one ended.
+VERIFY="no"
+VERIFY_RATE="50"
+VERIFY_INTERVAL="86400"

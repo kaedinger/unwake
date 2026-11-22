@@ -28,6 +28,15 @@ function settings() {
     return [...load_cfg(UNWAKE_DEFAULTS), ...load_cfg(UNWAKE_CFG)];
 }
 
+// The settings chosen from a list: value => label, in the page's order
+const CHOICES = [
+    'SERVICE'    => ['disabled' => 'No', 'enabled' => 'Yes'],
+    'HARVEST'    => ['yes' => 'Yes', 'no' => 'No - only what is browsed'],
+    'DATA_PATH'  => ['direct' => 'From their disk, when known', 'shfs' => 'Through shfs'],
+    'RETURN_RAM' => ['no' => 'No', 'yes' => 'Yes'],
+    'LOG_LEVEL'  => ['info' => 'Info', 'debug' => 'Debug (verbose - every change and cache miss)'],
+];
+
 function is_debug($cfg) { return ($cfg['LOG_LEVEL'] ?? '') === 'debug'; }
 
 function pid_alive($pid) { return $pid > 0 && file_exists("/proc/$pid"); }
@@ -151,7 +160,7 @@ function fmt_count($n) {
 
 function fmt_dur($ms) {
     $s = (int)round($ms / 1000);
-    if ($s >= 3600) return intdiv($s, 3600) . 'h ' . intdiv($s % 3600, 60) . 'm';
+    if ($s >= 3600) return intdiv($s, 3600) . 'h' . ($s % 3600 >= 60 ? ' ' . intdiv($s % 3600, 60) . 'm' : '');
     if ($s >= 60) return intdiv($s, 60) . 'm ' . ($s % 60) . 's';
     return $s . 's';
 }
@@ -197,7 +206,7 @@ function status_view($st) {
         '<span>Names</span><span>' . number_format($st['entries'] ?? 0) . '</span>' .
         '<span>Names the kernel holds an inode for</span><span>' . number_format($st['inodes'] ?? 0) . '</span>' .
         '<span>RAM used by unwaked</span><span>' . fmt_bytes(($st['rss_kb'] ?? 0) * 1024) . '</span>' .
-        (isset($st['kept_free_kb']) && (settings()['RETURN_RAM'] ?? 'yes') !== 'yes' ? '<span>of it freed, kept for reuse</span><span>' . fmt_bytes($st['kept_free_kb'] * 1024) . '</span>' : '') .
+        (isset($st['kept_free_kb']) && settings()['RETURN_RAM'] !== 'yes' ? '<span>of it freed, kept for reuse</span><span>' . fmt_bytes($st['kept_free_kb'] * 1024) . '</span>' : '') .
         '<span>Changes seen on the disks</span><span>' . number_format($st['events'] ?? 0) . '</span>' .
         '<span>File data</span><span>' . (!empty($st['passthrough']) ? 'kernel passthrough' : 'through unwaked') . '</span>' .
         '<span>Running since</span><span>' . (isset($st['started']) ? fmt_when($st['started']) : '-') . '</span></div>';

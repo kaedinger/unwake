@@ -48,16 +48,17 @@ struct Config {
     std::string disks_ini  = "/var/local/emhttp/disks.ini";
     std::string var_ini    = "/var/local/emhttp/var.ini";
     std::string cfg_file   = "/boot/config/plugins/unwake/unwake.cfg";
+    std::string defaults_file = "/usr/local/emhttp/plugins/unwake/unwake.cfg.default";   // every setting and its default
     std::string log_file   = "/var/log/unwake.log";
     std::string run_dir    = "/var/run/unwake";
     std::string shares_dir = "/boot/config/shares";   // Unraid's share settings
     std::vector<std::string> branch_args;   // --branch name=path[,rotational]: no disks.ini
 
-    // from unwake.cfg
-    bool        debug        = false;
-    std::atomic<bool> harvest{true};
-    std::atomic<bool> direct_reads{true};   // DATA_PATH=direct: reads of files on one known disk skip shfs
-    std::atomic<bool> return_ram{true};     // RETURN_RAM=yes: hand freed memory back after the kernel forgot many names
+    // settings: unwake.cfg over unwake.cfg.default (load_config), which holds the defaults
+    bool        debug        = false;       // LOG_LEVEL=debug
+    std::atomic<bool> harvest{false};
+    std::atomic<bool> direct_reads{false};  // DATA_PATH=direct: reads of files on one known disk skip shfs
+    std::atomic<bool> return_ram{false};    // RETURN_RAM=yes: hand freed memory back after the kernel forgot many names
     std::vector<std::string> excluded_explicit, included_explicit;   // EXCLUDED_SHARES, INCLUDED_SHARES
     // effective set, sorted: explicit exclusions plus shares that live on SSD pools only.
     // Replaced as a whole; readers take a snapshot (std::atomic_load)
@@ -66,14 +67,14 @@ struct Config {
     std::shared_ptr<const std::vector<std::string>> uncached_paths = std::make_shared<std::vector<std::string>>();
     std::string verify_log   = "/var/log/unwake-verify.log";
     std::atomic<bool> verify{false};        // VERIFY=yes (a beta build verifies anyway)
-    static constexpr long VERIFY_RATE_DEFAULT = 50, VERIFY_INTERVAL_DEFAULT = 86400;
-    std::atomic<long> verify_rate{VERIFY_RATE_DEFAULT};           // VERIFY_RATE: folders per second and disk
-    std::atomic<long> verify_interval{VERIFY_INTERVAL_DEFAULT};   // VERIFY_INTERVAL: seconds from the end of a pass to the next
-    long        log_max_mb   = 16;
-    long        log_trim_mb  = 2;
+    std::atomic<long> verify_rate{1};       // VERIFY_RATE: folders per second and disk
+    std::atomic<long> verify_interval{0};   // VERIFY_INTERVAL: seconds from the end of a pass to the next
+    long        log_max_mb   = 1;           // LOG_MAX_SIZE_MB
+    long        log_trim_mb  = 1;           // LOG_TRIM_SIZE_MB
 };
 extern Config g_cfg;
-std::vector<std::string> load_config();   // returns warnings
+// false: unwake.cfg.default missing or broken - nothing changed. warn: what to log
+bool load_config(std::vector<std::string>& warn);
 std::string trim(const std::string& s);
 std::vector<std::string> split(const std::string& s, char sep);
 std::string join_path(const std::string& dir, const std::string& name);   // "" + "a" = "a"

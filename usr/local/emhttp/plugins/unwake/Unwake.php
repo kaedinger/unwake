@@ -6,9 +6,16 @@
 
 require_once __DIR__ . '/include/cfg.php';
 
-function opt($val, $current, $label) {
-    $sel = ($current === $val) ? ' selected' : '';
-    return '<option value="' . htmlspecialchars($val) . "\"$sel>" . htmlspecialchars($label) . '</option>';
+// A setting chosen from a list (CHOICES), and the note on its default for the help text
+function choice($key, $current) {
+    $h = '<select name="' . $key . '" id="uw_' . $key . '">';
+    foreach (CHOICES[$key] as $val => $label)
+        $h .= '<option value="' . htmlspecialchars($val) . '"' . ($current === $val ? ' selected' : '') . '>' . htmlspecialchars($label) . '</option>';
+    return $h . '</select>';
+}
+function default_note($key, $defaults) {
+    $d = $defaults[$key] ?? '';
+    return '<strong>Default: ' . htmlspecialchars(CHOICES[$key][$d] ?? $d) . '.</strong>';
 }
 
 $defaults  = load_cfg(UNWAKE_DEFAULTS);
@@ -160,7 +167,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
   <dd class="uw-verify-row"<?= $view['verify'] ? '' : ' style="display:none;"' ?>>
     <div class="uw-fold-line" onclick="uwFold('verify')"><span id="uw-fold-caret-verify">&#9656;</span> <span id="uw-verify-line"><?= htmlspecialchars($view['verify'] ?: '-') ?></span></div>
     <div class="uw-fold-verify" style="display:none;" id="uw-verify-detail"><?= $view['verify_detail'] ?></div>
-    <div class="uw-help">Betas check the folders in RAM against the disks: up to 50 folders per second and disk, only while a disk spins and something else uses it (so it never keeps a disk from spinning down), and a disk's next pass a day after its last one ended. A difference counts only if a second look 5 seconds later shows the same. It is repaired in RAM and written to <code>/var/log/unwake-verify.log</code>, with what Unwake passed to shfs for that folder before. Stable versions verify with <code>VERIFY="yes"</code> in <code>unwake.cfg</code>.</div>
+    <div class="uw-help">Betas check the folders in RAM against the disks: up to <?= (int)$c['VERIFY_RATE'] ?> folders per second and disk, only while a disk spins and something else uses it (so it never keeps a disk from spinning down), and a disk's next pass <?= fmt_dur((int)$c['VERIFY_INTERVAL'] * 1000) ?> after its last one ended (<code>VERIFY_RATE</code>, <code>VERIFY_INTERVAL</code> in <code>unwake.cfg</code>). A difference counts only if a second look 5 seconds later shows the same. It is repaired in RAM and written to <code>/var/log/unwake-verify.log</code>, with what Unwake passed to shfs for that folder before. Stable versions verify with <code>VERIFY="yes"</code> in <code>unwake.cfg</code>.</div>
   </dd>
 </dl>
 
@@ -169,47 +176,32 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
 <dl>
   <dt class="uw-has-help" onclick="uwToggleHelp(this)">Enable Unwake</dt>
   <dd>
-    <select name="SERVICE" id="uw_SERVICE">
-      <?= opt('disabled', $c['SERVICE'], 'No') ?>
-      <?= opt('enabled',  $c['SERVICE'], 'Yes') ?>
-    </select>
-    <div class="uw-help">Master switch. Yes starts Unwake now, if the array is started, and with every array start. <strong>Default: No.</strong></div>
+    <?= choice('SERVICE', $c['SERVICE']) ?>
+    <div class="uw-help">Master switch. Yes starts Unwake now, if the array is started, and with every array start. <?= default_note('SERVICE', $defaults) ?></div>
   </dd>
 
   <dt class="uw-has-help" onclick="uwToggleHelp(this)">Read Folders of Spinning Disks</dt>
   <dd>
-    <select name="HARVEST" id="uw_HARVEST">
-      <?= opt('yes', $c['HARVEST'], 'Yes') ?>
-      <?= opt('no',  $c['HARVEST'], 'No - only what is browsed') ?>
-    </select>
-    <div class="uw-help">While a disk is spinning anyway, read all of its folders into RAM once, at idle priority, so even folders nobody has opened yet won't wake it later. With No, Unwake learns only the folders that are listed through it. <strong>Default: Yes.</strong></div>
+    <?= choice('HARVEST', $c['HARVEST']) ?>
+    <div class="uw-help">While a disk is spinning anyway, read all of its folders into RAM once, at idle priority, so even folders nobody has opened yet won't wake it later. With No, Unwake learns only the folders that are listed through it. <?= default_note('HARVEST', $defaults) ?></div>
   </dd>
 
   <dt class="uw-has-help" onclick="uwToggleHelp(this)">Read Files</dt>
   <dd>
-    <select name="DATA_PATH" id="uw_DATA_PATH">
-      <?= opt('direct', $c['DATA_PATH'], 'From their disk, when known') ?>
-      <?= opt('shfs',   $c['DATA_PATH'], 'Through shfs') ?>
-    </select>
-    <div class="uw-help">Unwake never copies file data itself: the kernel reads and writes the files directly. <em>From their disk</em> reads a file that is known to exist on exactly one disk from that disk, skipping shfs. That keeps one copy less of the file in RAM, and so less pressure on the caches. Writes always go through shfs, which picks the disk. <strong>Default: From their disk.</strong></div>
+    <?= choice('DATA_PATH', $c['DATA_PATH']) ?>
+    <div class="uw-help">Unwake never copies file data itself: the kernel reads and writes the files directly. <em>From their disk</em> reads a file that is known to exist on exactly one disk from that disk, skipping shfs. That keeps one copy less of the file in RAM, and so less pressure on the caches. Writes always go through shfs, which picks the disk. <?= default_note('DATA_PATH', $defaults) ?></div>
   </dd>
 
   <dt class="uw-has-help" onclick="uwToggleHelp(this)">Return Freed RAM</dt>
   <dd>
-    <select name="RETURN_RAM" id="uw_RETURN_RAM">
-      <?= opt('no',  $c['RETURN_RAM'], 'No') ?>
-      <?= opt('yes', $c['RETURN_RAM'], 'Yes') ?>
-    </select>
-    <div class="uw-help">Besides the folders, Unwake keeps an entry for every name the kernel currently holds an inode for. A backup or a media scan through /mnt/user makes that many, and the kernel lets go of them only when it needs the RAM. With Yes, Unwake hands the memory freed then back to the system (at most every 5 minutes, after at least 100,000 names). With No, it keeps it for the next backup, which then gets it a little faster; the status shows how much is kept. Handing it back costs a few milliseconds each time and doesn't slow anything else down. <strong>Default: Yes.</strong></div>
+    <?= choice('RETURN_RAM', $c['RETURN_RAM']) ?>
+    <div class="uw-help">Besides the folders, Unwake keeps an entry for every name the kernel currently holds an inode for. A backup or a media scan through /mnt/user makes that many, and the kernel lets go of them only when it needs the RAM. With Yes, Unwake hands the memory freed then back to the system (at most every 5 minutes, after at least 100,000 names). With No, it keeps it for the next backup, which then gets it a little faster; the status shows how much is kept. Handing it back costs a few milliseconds each time and doesn't slow anything else down. <?= default_note('RETURN_RAM', $defaults) ?></div>
   </dd>
 
   <dt class="uw-has-help" onclick="uwToggleHelp(this)">Log Level</dt>
   <dd>
-    <select name="LOG_LEVEL" id="uw_LOG_LEVEL">
-      <?= opt('info',  $c['LOG_LEVEL'], 'Info') ?>
-      <?= opt('debug', $c['LOG_LEVEL'], 'Debug (verbose - every change and cache miss)') ?>
-    </select>
-    <div class="uw-help"><strong>Default: Info.</strong></div>
+    <?= choice('LOG_LEVEL', $c['LOG_LEVEL']) ?>
+    <div class="uw-help"><?= default_note('LOG_LEVEL', $defaults) ?></div>
   </dd>
 
   <dt class="uw-has-help" onclick="uwToggleHelp(this)">Log Max Size</dt>
@@ -219,7 +211,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
       <span>MB</span>
       <span class="uw-reset" onclick="uwReset('LOG_MAX_SIZE_MB')" title="Reset to default">&#x21ba;</span>
     </div>
-    <div class="uw-help">Largest size of the log file. When it grows past this, the oldest entries are cut away down to <em>Log Trim Size</em>. <strong>Default: <?= htmlspecialchars($defaults['LOG_MAX_SIZE_MB']) ?>.</strong></div>
+    <div class="uw-help">Largest size of the log file. When it grows past this, the oldest entries are cut away down to <em>Log Trim Size</em>. <strong>Default: <?= htmlspecialchars($defaults['LOG_MAX_SIZE_MB']) ?> MB.</strong></div>
   </dd>
 
   <dt class="uw-has-help" onclick="uwToggleHelp(this)">Log Trim Size</dt>
@@ -229,7 +221,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
       <span>MB</span>
       <span class="uw-reset" onclick="uwReset('LOG_TRIM_SIZE_MB')" title="Reset to default">&#x21ba;</span>
     </div>
-    <div class="uw-help">How much of the log is kept when it is cut: the newest entries, this many MB. Smaller than <em>Log Max Size</em>, so the log isn't cut again with every new entry. <strong>Default: <?= htmlspecialchars($defaults['LOG_TRIM_SIZE_MB']) ?>.</strong></div>
+    <div class="uw-help">How much of the log is kept when it is cut: the newest entries, this many MB. Smaller than <em>Log Max Size</em>, so the log isn't cut again with every new entry. <strong>Default: <?= htmlspecialchars($defaults['LOG_TRIM_SIZE_MB']) ?> MB.</strong></div>
   </dd>
 </dl>
 

@@ -306,14 +306,37 @@ static struct fuse_session* mount_new(struct fuse_args* args, TopMount& mine) {
     return se;
 }
 
+// SIGHUP: the settings page saved
+static void reload_settings() {
+    auto before = *std::atomic_load(&g_cfg.excluded_shares);
+    std::vector<std::string> warn;
+    bool ok = load_config(warn);
+    for (auto& w : warn) (ok ? log_warn : log_err)(w);
+    if (!ok) { log_err("Settings not reloaded - the ones in use stay"); return; }
+    apply_exclusions();
+    log_info("Settings reloaded");
+    if (before != *std::atomic_load(&g_cfg.excluded_shares) && g_caching) {
+        // a share that comes back missed its changes while excluded: start over
+        log_info("Excluded shares changed - the cache starts over");
+        std::unique_lock<std::shared_mutex> l(g_tree.mu);
+        tree_clear_all();
+        for (size_t i = 0; i < g_branches.size(); i++) harvester_restart((int)i);
+    }
+}
+
 static int worker() {
     time_t started = time(nullptr);
     install_signals();
     signal(SIGUSR2, SIG_IGN);
     umask(0);   // the caller's mode arrives with its umask applied; ours must not cut it further
     install_crash_handler();
-    for (auto& w : load_config()) log_warn(w);
     bool adopting = _adopt_fd >= 0;
+    {
+        std::vector<std::string> warn;
+        bool ok = load_config(warn);
+        for (auto& w : warn) (ok ? log_warn : log_err)(w);
+        if (!ok) { log_err("No settings - not starting"); return adopting ? 4 : 1; }
+    }
     log_info("unwaked " + _version + (adopting ? " taking over " + g_cfg.mountpoint + " from the running Unwake" : " starting on " + g_cfg.mountpoint) +
              " (pid " + std::to_string(getpid()) + ")");
 
@@ -353,20 +376,7 @@ static int worker() {
                     if (done) { _handed_over = true; return; }
                 }
             }
-            if (_sig_reload) {
-                _sig_reload = 0;
-                auto before = *std::atomic_load(&g_cfg.excluded_shares);
-                for (auto& w : load_config()) log_warn(w);
-                apply_exclusions();
-                log_info("Settings reloaded");
-                if (before != *std::atomic_load(&g_cfg.excluded_shares) && g_caching) {
-                    // a share that comes back missed its changes while excluded: start over
-                    log_info("Excluded shares changed - the cache starts over");
-                    std::unique_lock<std::shared_mutex> l(g_tree.mu);
-                    tree_clear_all();
-                    for (size_t i = 0; i < g_branches.size(); i++) harvester_restart((int)i);
-                }
-            }
+            if (_sig_reload) { _sig_reload = 0; reload_settings(); }
             if (g_cfg.return_ram && tick % 4 == 0) trim_ram();
             bool stopping_array = array_stopping();
             if ((_sig_stop || stopping_array) && !detached_at) {
@@ -596,20 +606,25 @@ static int supervisor(pid_t adopt_child) {
 }
 
 static void usage() {
+    const Config d;   // the built-in paths
     fprintf(stderr,
         "unwaked %s - directory cache for Unraid user shares\n"
         "usage: unwaked [options]\n"
-        "  --mountpoint PATH   user share mount (default /mnt/user)\n"
-        "  --config FILE       settings (default /boot/config/plugins/unwake/unwake.cfg)\n"
-        "  --log FILE          log file (default /var/log/unwake.log)\n"
-        "  --verify-log FILE   the verifier's log (default /var/log/unwake-verify.log)\n"
-        "  --run-dir DIR       status and ready files (default /var/run/unwake)\n"
-        "  --disks-ini FILE    emhttpd disks.ini\n"
-        "  --var-ini FILE      emhttpd var.ini\n"
+        "  --mountpoint PATH   user share mount (default %s)\n"
+        "  --config FILE       settings (default %s)\n"
+        "  --defaults FILE     every setting and its default (default %s)\n"
+        "  --log FILE          log file (default %s)\n"
+        "  --verify-log FILE   the verifier's log (default %s)\n"
+        "  --run-dir DIR       status and ready files (default %s)\n"
+        "  --disks-ini FILE    emhttpd disks.ini (default %s)\n"
+        "  --var-ini FILE      emhttpd var.ini (default %s)\n"
+        "  --shares-dir DIR    Unraid's share settings (default %s)\n"
         "  --branch NAME=PATH[,ssd]   use these branches instead of disks.ini (tests)\n"
         "  --no-supervisor     run the worker only\n"
         "  --handover-formats  print the state formats this version can take over from\n"
-        "In-place upgrade (internal): --adopt-fd FD, --ctl-fd FD, --supervise PID\n", _version.c_str());
+        "In-place upgrade (internal): --adopt-fd FD, --ctl-fd FD, --supervise PID\n",
+        _version.c_str(), d.mountpoint.c_str(), d.cfg_file.c_str(), d.defaults_file.c_str(), d.log_file.c_str(),
+        d.verify_log.c_str(), d.run_dir.c_str(), d.disks_ini.c_str(), d.var_ini.c_str(), d.shares_dir.c_str());
 }
 
 static std::string self_exe() {
@@ -631,6 +646,7 @@ int main(int argc, char** argv) {
         auto keep = [&](const std::string& v) { _args.push_back(a); _args.push_back(v); return v; };
         if (a == "--mountpoint") g_cfg.mountpoint = keep(val());
         else if (a == "--config") g_cfg.cfg_file = keep(val());
+        else if (a == "--defaults") g_cfg.defaults_file = keep(val());
         else if (a == "--log") g_cfg.log_file = keep(val());
         else if (a == "--verify-log") g_cfg.verify_log = keep(val());
         else if (a == "--run-dir") g_cfg.run_dir = keep(val());
