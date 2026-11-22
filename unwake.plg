@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.20.52087-beta">
+  <!ENTITY version   "2026.11.22.41090-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,7 +20,7 @@
 >
 
 <CHANGES>
-### next
+### 2026.11.22.41090-beta
 - fix: an in-place upgrade also stops watching for changes the new version no longer follows
 - fix: an in-place upgrade makes Unwake watch for the changes the new version follows; after upgrades from versions before 2026.11.19.54162-beta, atime after a read stayed old (the verifier repaired it)
 - docs: README section on the stable and beta channel
