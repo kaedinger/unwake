@@ -20,6 +20,9 @@
 >
 
 <CHANGES>
+### next
+- docs: README section on the stable and beta channel
+
 ### 2026.11.20.52087-beta
 - log: free-space queries are no longer listed (the web UI asks for every share every second, and they don't wake disks)
 - log: every request names the process that sent it (some named the one before)
