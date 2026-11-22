@@ -76,6 +76,7 @@ void events_handover_out(HoWriter& w);     // the fanotify group and its marks
 void events_handover_in(HoReader& r);
 void events_pause();                       // reader thread stopped, pending re-stats done; the group stays
 void events_resume();                      // reader thread runs again (also after events_handover_in)
+void events_apply_mask();                  // after a takeover: the marks watch this version's events
 
 inline void attr_out(HoWriter& w, const Attr& a) {
     w.u32(a.mode); w.u32(a.uid); w.u32(a.gid); w.u32(a.nlink);

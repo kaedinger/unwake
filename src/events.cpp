@@ -55,6 +55,19 @@ static std::mutex _marks_mu;
 static constexpr uint64_t EVENTS = FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO |
                                    FAN_ATTRIB | FAN_MODIFY | FAN_CLOSE_NOWRITE | FAN_CLOSE_WRITE | FAN_ONDIR;
 
+// The events a new mark watches. Tests only: <run_dir>/test-events-mask (hex) stands for
+// an older version that watched other events, to test an in-place upgrade from it.
+static uint64_t mark_mask() {
+#if UNWAKE_TEST_HOOKS
+    if (!g_cfg.branch_args.empty()) {
+        std::ifstream f(g_cfg.run_dir + "/test-events-mask");
+        std::string hex;
+        if (f >> hex) return std::stoull(hex, nullptr, 16);
+    }
+#endif
+    return EVENTS;
+}
+
 // Every mount point at or below a branch root, from mountinfo (no disk I/O).
 static std::vector<Mark> wanted_marks() {
     std::vector<Mark> out;
@@ -102,7 +115,7 @@ void events_rescan_mounts() {
             }
             now.insert(w.path);
             if (_marks.count(w.path)) continue;
-            if (fanotify_mark(_fan, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, EVENTS, AT_FDCWD, w.path.c_str()) != 0) {
+            if (fanotify_mark(_fan, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, mark_mask(), AT_FDCWD, w.path.c_str()) != 0) {
                 g_branches[w.branch]->untracked = true;
                 events_broken("Can't watch " + w.path + " (" + w.fstype + ": " + strerror(errno) + ")");
                 continue;
@@ -455,6 +468,40 @@ void events_resume() {
     if (_fan < 0 || _thr.joinable()) return;
     _stop = false;
     _thr = std::thread(loop);
+}
+
+// The masks of the group's marks, from /proc/self/fdinfo ("fanotify sdev:.. mflags:.. mask:..").
+static std::set<uint64_t> mark_masks() {
+    std::set<uint64_t> out;
+    std::ifstream f("/proc/self/fdinfo/" + std::to_string(_fan));
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.compare(0, 9, "fanotify ")) continue;
+        auto at = line.find(" mask:");
+        if (at != std::string::npos) out.insert(std::stoull(line.substr(at + 6), nullptr, 16));
+    }
+    return out;
+}
+
+static std::string hex(uint64_t v) { char x[20]; snprintf(x, sizeof x, "0x%llx", (unsigned long long)v); return x; }
+
+// After an in-place upgrade: the marks came over as the version that set them made them,
+// with the events that one watched (a version from before reads were followed watched no
+// FAN_CLOSE_*). Watch this version's events on each of them; ADD adds to what a mark has.
+void events_apply_mask() {
+    if (_fan < 0) return;
+    bool missing = false;
+    for (auto m : mark_masks()) if ((m & EVENTS) != EVENTS) missing = true;
+    std::lock_guard<std::mutex> l(_marks_mu);
+    int failed = 0;
+    for (auto& kv : _marks)
+        if (fanotify_mark(_fan, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, EVENTS, AT_FDCWD, kv.first.c_str()) != 0) {
+            log_warn("Upgrade: can't change the events watched on " + kv.first + " (" + strerror(errno) + ")");
+            failed++;
+        }
+    if (missing && !failed)
+        log_info("Upgrade: the disks and pools were watched for the events of an older version - now for this one's (" +
+                 hex(EVENTS) + ")");
 }
 
 void events_handover_out(HoWriter& w) {

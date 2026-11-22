@@ -256,6 +256,7 @@ static struct fuse_session* adopt(struct fuse_args* args, TopMount& mine, time_t
     mine.id = m.id; mine.major = m.major; mine.minor = m.minor; mine.fstype = "fuse.unwake";
     started = (time_t)m.started;
     apply_exclusions();   // the tree is in place: comes out as the old one had it
+    events_apply_mask();
     events_resume();
     return se;
 }

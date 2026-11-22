@@ -531,6 +531,40 @@ for _ in $(seq 1 30); do [ "$(top_fstype)" = fuse.unwake ] && break; sleep 0.2; 
 check "and it was restarted" test "$(top_fstype)" = "fuse.unwake"
 kill "$SUP"; wait "$SUP" 2>/dev/null
 
+say "in-place upgrade from a version that watched other events"
+# the marks go over as the old version set them: a version from before reads were followed
+# (no FAN_CLOSE_*, 0x18) left the box without them through every upgrade after it
+fan_masks() {   # the masks of the worker's fanotify marks, one per line
+    local w; w=$(worker_pid)
+    for fd in /proc/$w/fd/*; do
+        [ "$(readlink "$fd")" = "anon_inode:[fanotify]" ] || continue
+        grep -o ' mask:[0-9a-f]*' "/proc/$w/fdinfo/${fd##*/}" | cut -d: -f2
+    done
+}
+all_masks() { local m n=0; for m in $(fan_masks); do n=$((n + 1)); (( (0x$m & $1) == $2 )) || return 1; done; [ "$n" -gt 0 ]; }
+read_atime_kept() {   # a read through Unwake: is the new atime in RAM?
+    touch -a -d '3 days ago' "$T/mnt/disk1/$F"; sleep 2
+    cat "$T/mnt/user/$F" >/dev/null; sleep 2
+    test "$(stat -c %X "$T/mnt/user/$F")" = "$(stat -c %X "$T/mnt/disk1/$F")"
+}
+read_atime_lost() { ! read_atime_kept; }
+F=media/shows/ep-disk1-3.mkv
+printf '%x\n' $(( 0x400003de & ~0x18 )) > "$T/run/test-events-mask"
+start_unwake && wait_harvest
+rm -f "$T/run/test-events-mask"
+echo "  masks before: $(fan_masks | sort -u | tr '\n' ' ')"
+check "the old version watches no closes" all_masks 0x18 0
+check "with it, a read's atime doesn't reach RAM (what the box had)" read_atime_lost
+OLDW=$(worker_pid)
+kill -USR2 "$SUP"
+for _ in $(seq 1 100); do [ "$(worker_pid)" != "$OLDW" ] && [ -n "$(worker_pid)" ] && break; sleep 0.1; done
+sleep 1
+echo "  masks after: $(fan_masks | sort -u | tr '\n' ' ')"
+check "after the upgrade every mark watches closes" all_masks 0x18 0x18
+check "the log says the events changed" grep -q 'watched for the events of an older version' "$T/unwake.log"
+check "a read's atime reaches RAM again" read_atime_kept
+kill "$SUP"; wait "$SUP" 2>/dev/null
+
 say "diagnostics"
 check "rc.unwake diag writes its file" bash -c "out=\$(bash etc/rc.d/rc.unwake diag) && f=\${out#Saved to } && grep -q '== Unwake diagnostics' \"\$f\" && grep -q 'vfs_cache_pressure' \"\$f\""
 
