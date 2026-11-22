@@ -25,11 +25,11 @@
 - folders of a disk are read while it spins anyway, at idle priority, never waking it
 - every change on disks and pools is followed via fanotify: Mover, Unspin, direct writes to /mnt/diskN, containers, ZFS datasets
 - file data goes through the kernel (FUSE passthrough); a file is opened straight on the disk or pool shfs would take it from, as soon as that is known
-- shares that live on an SSD pool only aren't kept in RAM and are opened on the pool directly, not through shfs; any share can be passed to shfs on the settings page
+- shares that live on an SSD pool only aren't kept in RAM; their requests go straight to the pool, not through shfs; any share can be passed to shfs on the settings page
 - freed RAM is handed back after a backup's names are released (Return Freed RAM, on by default)
 - updates switch in place: containers, VMs and open files carry on
 - when a disk spins up, the log lists the requests Unwake passed to shfs before it, those for folders on that disk marked (with debug logging: which process asked)
-- an optional verifier (VERIFY="yes", not on the settings page) checks the folders in RAM against the disks while they spin anyway, repairs differences and logs them to unwake-verify.log
+- a verifier checks the folders in RAM against the disks while they spin anyway, repairs differences and logs them to unwake-verify.log (VERIFY="no" in unwake.cfg turns it off; betas show it on the settings page)
 - every setting has its default in unwake.cfg.default; an invalid saved value is reported and the default used
 - stop takes Unwake off at once; if unwaked dies, its mount is taken off and it is restarted
 - `rc.unwake diag` collects everything for a problem report; `rc.unwake users` names whatever still uses an older instance

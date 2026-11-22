@@ -37,7 +37,7 @@ Unwake runs `unwaked`, a FUSE daemon that sits **on top of** `/mnt/user` - shfs 
 
 **Keeping it current.** Unwake watches every disk and pool with **fanotify**, one mark per file system. Every change - through Unwake, straight on `/mnt/diskN`, by the Mover, Unbalanced, a container or Unspin - updates the tree right away. Nothing is re-read on a timer; once a disk has been read, it isn't read for its folders again.
 
-**What stays with shfs.** Shares that live on an SSD pool only can't wake a disk; they're passed to shfs untouched (unless an array disk still holds folders of them, then they're kept in RAM). You can untick any share to pass it to shfs.
+**What stays out of RAM.** Shares that live on an SSD pool only can't wake a disk, so they aren't kept in RAM; Unwake sends their requests straight to that pool, not through shfs, which would look every path up on every disk. If an array disk still holds folders of such a share, it's kept in RAM like the others. You can untick any share to pass it to shfs.
 
 ### File data and kernel passthrough
 
@@ -75,7 +75,7 @@ Measured on the author's server (1.4 million names): 376 MB before the nightly b
 - **Stacked, not replacing** - shfs stays mounted underneath; stopping Unwake takes it off at once, and what still uses it keeps working until it lets go
 - **Kernel passthrough for file data** - no copy through the daemon; files on one known disk are read from that disk directly
 - **In-place updates** - same mount, same open files; containers and VMs don't notice
-- **Shares in RAM** - every share listed with a tick box; SSD-pool-only shares are detected and passed to shfs unless an array disk still holds parts of them
+- **Shares in RAM** - every share listed with a tick box; SSD-pool-only shares are detected and go straight to their pool, unless an array disk still holds parts of them
 - **Spin-up diagnostics** - when a disk spins up, the log lists what Unwake passed to shfs that could have reached that disk
 - **Safe by design** - if `unwaked` dies, the supervisor takes its mount away at once, so `/mnt/user` is plain shfs again, and restarts it; on array stop, Unwake gets out of the way within 10 seconds
 - **Diagnostics in one file** - `rc.unwake diag`, and `rc.unwake users` names whatever still uses an older instance
@@ -162,11 +162,11 @@ CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XF
 | `LOG_LEVEL` | `info` | `info` or `debug` |
 | `LOG_MAX_SIZE_MB` | `16` | The log is cut once it grows past this |
 | `LOG_TRIM_SIZE_MB` | `2` | How much of the newest log is kept when it's cut |
-| `VERIFY` | `no` | `yes`: the verifier compares the folders in RAM with the disks and repairs what differs. A beta always verifies |
+| `VERIFY` | `yes` | The verifier compares the folders in RAM with the disks and repairs what differs. `no` turns it off; a beta always verifies |
 | `VERIFY_RATE` | `50` | Folders per second and disk the verifier checks (at least `1`) |
 | `VERIFY_INTERVAL` | `86400` | Seconds from the end of a disk's pass to its next one (`0`: right away) |
 
-The three `VERIFY` keys are not on the settings page; set them in `/boot/config/plugins/unwake/unwake.cfg`, then run `/etc/rc.d/rc.unwake reload`. The verifier needs `HARVEST=yes` and checks a disk only after its folders were read once, and only while it spins anyway and something else is using it, so it never keeps a disk awake. Every difference it finds goes to `/var/log/unwake-verify.log`.
+The three `VERIFY` keys are not on the settings page (betas show the verifier's progress there, stable versions verify without showing it); set them in `/boot/config/plugins/unwake/unwake.cfg`, then run `/etc/rc.d/rc.unwake reload`. The verifier needs `HARVEST=yes` and checks a disk only after its folders were read once, and only while it spins anyway and something else is using it, so it never keeps a disk awake. Every difference it finds goes to `/var/log/unwake-verify.log`.
 
 ---
 

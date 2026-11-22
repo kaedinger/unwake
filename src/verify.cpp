@@ -10,7 +10,8 @@
 // isn't a difference). Each difference is repaired in RAM and written to its own
 // log (unwake-verify.log), with the requests Unwake passed to shfs for that folder.
 //
-// On with VERIFY=yes (not on the settings page); a beta build verifies regardless.
+// On unless VERIFY=no (not on the settings page, shown there in betas only); a beta build
+// verifies regardless.
 #include "unwaked.h"
 
 #include <algorithm>

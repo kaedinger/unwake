@@ -273,12 +273,14 @@ function status_view($st) {
     $v['hits'] = $all ? round(100 * $hit / $all, 1) . '% of ' . fmt_count($all) . ' requests answered from RAM' : 'No requests yet';
     $v['hits_detail'] = $tbl;
 
+    // stables verify too, but only betas show it (Verify section, "verified" in Disks and Pools)
+    $beta = substr($st['version'] ?? '', -5) === '-beta';
     $cards = '';
     foreach ($st['branches'] ?? [] as $b) {
         $ssd = empty($b['rotational']);
         if (!empty($b['untracked'])) $state = '<span class="red-text">changes can\'t be watched</span>';
         elseif (!empty($b['harvesting'])) $state = 'reading its folders now';
-        elseif (!empty($b['harvested']) && ($b['verify']['done_at'] ?? 0) > ($b['harvested_at'] ?? 0))
+        elseif ($beta && !empty($b['harvested']) && ($b['verify']['done_at'] ?? 0) > ($b['harvested_at'] ?? 0))
             $state = fmt_count($b['dirs']) . ' folders, verified ' . fmt_when($b['verify']['done_at']);
         elseif (!empty($b['harvested'])) $state = fmt_count($b['dirs']) . ' folders, read ' . fmt_when($b['harvested_at']) .
                                                   ' in ' . fmt_dur($b['harvest_ms']);
@@ -288,8 +290,8 @@ function status_view($st) {
     }
     $v['disks'] = $cards;
 
-    // the verifier (always on in betas): its own section, one line per disk, the current pass only
-    if (!empty($st['verifying'])) {
+    // the verifier (always on in betas, shown in betas only): its own section, one line per disk, the current pass only
+    if ($beta && !empty($st['verifying'])) {
         $diffs = function ($f, $r, $p) {
             if (!$f) return '0 differences';
             $n = number_format($f) . ' difference' . ($f == 1 ? '' : 's');

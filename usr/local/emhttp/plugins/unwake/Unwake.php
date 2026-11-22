@@ -159,14 +159,14 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
   <dt class="uw-has-help" onclick="uwToggleHelp(this)">Disks and Pools</dt>
   <dd>
     <div id="uw-disks"><?= $view['disks'] ?: '<span class="uw-muted">-</span>' ?></div>
-    <div class="uw-help">Detected from Unraid's disk assignments: every array disk and pool that is part of the user shares. The dot shows whether a disk is spinning (green) or spun down. Unwake reads a disk's folders only while it spins anyway, at idle I/O priority, and never wakes one to do so. After that, it follows every change as it happens and doesn't read the folders again.</div>
+    <div class="uw-help">Detected from Unraid's disk assignments: every array disk and pool that is part of the user shares. The dot shows whether a disk is spinning (green) or spun down. Unwake reads a disk's folders only while it spins anyway, at idle I/O priority, and never wakes one to do so. After that, it follows every change as it happens.</div>
   </dd>
 
   <dt class="uw-has-help uw-verify-row" onclick="uwToggleHelp(this)"<?= $view['verify'] ? '' : ' style="display:none;"' ?>>Verify</dt>
   <dd class="uw-verify-row"<?= $view['verify'] ? '' : ' style="display:none;"' ?>>
     <div class="uw-fold-line" onclick="uwFold('verify')"><span id="uw-fold-caret-verify">&#9656;</span> <span id="uw-verify-line"><?= htmlspecialchars($view['verify'] ?: '-') ?></span></div>
     <div class="uw-fold-verify" style="display:none;" id="uw-verify-detail"><?= $view['verify_detail'] ?></div>
-    <div class="uw-help">Betas check the folders in RAM against the disks: up to <?= (int)$c['VERIFY_RATE'] ?> folders per second and disk, only while a disk spins and something else uses it (so it never keeps a disk from spinning down), and a disk's next pass <?= fmt_dur((int)$c['VERIFY_INTERVAL'] * 1000) ?> after its last one ended (<code>VERIFY_RATE</code>, <code>VERIFY_INTERVAL</code> in <code>unwake.cfg</code>). A difference counts only if a second look <?= fmt_dur(limit('verify_confirm_s') * 1000) ?> later shows the same. It is repaired in RAM and written to <code>/var/log/unwake-verify.log</code>, with what Unwake passed to shfs for that folder before. Stable versions verify with <code>VERIFY="yes"</code> in <code>unwake.cfg</code>.</div>
+    <div class="uw-help">Unwake checks the folders in RAM against the disks: up to <?= (int)$c['VERIFY_RATE'] ?> folders per second and disk, only while a disk spins and something else uses it (so it never keeps a disk from spinning down), and a disk's next pass <?= fmt_dur((int)$c['VERIFY_INTERVAL'] * 1000) ?> after its last one ended (<code>VERIFY_RATE</code>, <code>VERIFY_INTERVAL</code> in <code>unwake.cfg</code>). A difference counts only if a second look <?= fmt_dur(limit('verify_confirm_s') * 1000) ?> later shows the same. It is repaired in RAM and written to <code>/var/log/unwake-verify.log</code>, with what Unwake passed to shfs for that folder before. <code>VERIFY="no"</code> turns it off in stable versions, which verify without showing it here.</div>
   </dd>
 </dl>
 

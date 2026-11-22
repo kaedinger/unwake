@@ -75,6 +75,7 @@ LOG_LEVEL="debug"
 HARVEST="yes"
 DATA_PATH="direct"
 EXCLUDED_SHARES="excluded"
+VERIFY="no"
 EOF
     sysctl -q vm.vfs_cache_pressure=100   # drop_caches then also drops dentries, inodes and XFS buffers
 }
@@ -339,7 +340,7 @@ rm -f "$T/mnt/user/media/movies/disk2-only/who-test"
 say "verifier: the tree equals the disks, planted errors are found and repaired"
 vall() { stat_json "all(b['verify']['state'] == 'done' for b in d['branches'] if b['harvested'])"; }
 vsum() { stat_json "sum(b['verify']['$1'] for b in d['branches'])"; }
-printf 'VERIFY="yes"\nVERIFY_RATE="1000"\n' >> "$T/unwake.cfg"; kill -HUP "$SUP"
+sed -i '/^VERIFY/d' "$T/unwake.cfg"; printf 'VERIFY="yes"\nVERIFY_RATE="1000"\n' >> "$T/unwake.cfg"; kill -HUP "$SUP"
 for _ in $(seq 1 60); do sleep 0.5; [ "$(vall)" = True ] && break; done
 check "a full pass on every disk" test "$(vall)" = True
 check "no differences after all the tests above" test ! -s "$T/verify.log"
@@ -362,7 +363,17 @@ check "repaired: size as on the disk" test "$(stat -c %s "$T/mnt/user/media/show
 check "this pass on the status: 3 found, 3 repaired, none pending" test "$(vsum found).$(vsum repaired).$(vsum pending)" = "3.3.0"
 stat_json "[(b['name'], b['verify']) for b in d['branches']]" | sed 's/^/  verify status: /'
 rm -f "$T/run/test-verify-now"
-sed -i '/^VERIFY/d' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
+# VERIFY not saved: the default from unwake.cfg.default, on (stables verify too, hidden on the page)
+sed -i '/^VERIFY/d' "$T/unwake.cfg"; kill -HUP "$SUP"
+for _ in $(seq 1 20); do sleep 0.5; [ "$(stat_json "d['verifying']")" = 1 ] && break; done
+check "the verifier is on by default" test "$(stat_json "d['verifying']")" = 1
+case "$(stat_json "d['version']")" in
+    *-beta) ;;   # a beta verifies regardless
+    *) echo 'VERIFY="no"' >> "$T/unwake.cfg"; kill -HUP "$SUP"
+       for _ in $(seq 1 20); do sleep 0.5; [ "$(stat_json "d['verifying']")" = 0 ] && break; done
+       check "VERIFY=\"no\" turns it off" test "$(stat_json "d['verifying']")" = 0 ;;
+esac
+sed -i '/^VERIFY/d' "$T/unwake.cfg"; echo 'VERIFY="no"' >> "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
 
 say "settings: unwake.cfg over unwake.cfg.default"
 n0=$(grep -c 'Settings reloaded' "$T/unwake.log")
