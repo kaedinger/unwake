@@ -20,6 +20,9 @@
 >
 
 <CHANGES>
+### next
+- ui: the settings page links the support thread in the Unraid forum
+
 ### 2026.11.22.64600
 - Initial release: Unwake sits on top of /mnt/user and answers folder listings, name lookups, attributes and extended attributes (including Samba's ACL reads) from RAM, so they don't wake sleeping disks
 - folders of a disk are read while it spins anyway, at idle priority, never waking it

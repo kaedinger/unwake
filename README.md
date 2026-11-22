@@ -13,7 +13,7 @@ Unwake's brother is [Unspin](https://github.com/kaedinger/unspin), which has the
   <a href="https://github.com/kaedinger/unwake/releases"><img src="https://img.shields.io/github/release-date/kaedinger/unwake?style=flat-square" alt="Release Date"></a>
   <a href="https://unraid.net/"><img src="https://img.shields.io/badge/Unraid-tested%20with%207.3.2-white?logo=unraid&logoColor=white&labelColor=orange" alt="Tested with Unraid 7.3.2"></a>
   <a href="https://github.com/kaedinger/unwake/issues"><img src="https://img.shields.io/github/issues/kaedinger/unwake?style=flat-square" alt="Open Issues"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Support-Unraid%20Forum-F15A2C?style=flat-square" alt="Support Thread"></a>
+  <a href="https://forums.unraid.net/topic/201382-plugin-unwake-directory-caching-for-unraid-user-shares/"><img src="https://img.shields.io/badge/Support-Unraid%20Forum-F15A2C?style=flat-square" alt="Support Thread"></a>
 </p>
 
 ---

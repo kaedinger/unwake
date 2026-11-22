@@ -268,7 +268,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
   <span class="uw-footer-sep">·</span>
   <a href="<?= UNWAKE_REPO ?>" target="_blank" rel="noopener">GitHub / Issues</a>
   <span class="uw-footer-sep">·</span>
-  <a href="#" onclick="return false;" title="Support forum thread follows with the first public release">Support forum</a>
+  <a href="https://forums.unraid.net/topic/201382-plugin-unwake-directory-caching-for-unraid-user-shares/" target="_blank" rel="noopener">Support forum</a>
   <span class="uw-footer-sep">·</span>
   <a href="https://github.com/sponsors/kaedinger" target="_blank" rel="noopener">Sponsor ♥ - THANK YOU</a>
   <span class="uw-footer-sep">·</span>
