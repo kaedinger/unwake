@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.22.64600">
+  <!ENTITY version   "2026.11.22.66875">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,7 +20,7 @@
 >
 
 <CHANGES>
-### next
+### 2026.11.22.66875
 - ui: the settings page links the support thread in the Unraid forum
 
 ### 2026.11.22.64600
