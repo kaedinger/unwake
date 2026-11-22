@@ -15,6 +15,9 @@ LOG_FILE=${UNWAKE_LOG:-/var/log/unwake.log}
 MNT=${UNWAKE_MNT:-/mnt/user}
 DEFAULTS=/usr/local/emhttp/plugins/unwake/unwake.cfg.default
 CFG=/boot/config/plugins/unwake/unwake.cfg
+PLG=/boot/config/plugins/unwake.plg
+VERIFY_LOG=/var/log/unwake-verify.log
+UPGRADE_WAIT=120   # seconds for an in-place upgrade to answer
 
 mkdir -p "$RUN"
 
@@ -25,6 +28,7 @@ sup_pid() { cat "$PID_FILE" 2>/dev/null; }
 draining_pids() { local f; for f in "$RUN"/draining.*; do [ -f "$f" ] && cat "$f"; done; }
 top_fstype() { awk -v m="$MNT" '$5 == m {t=$0} END {split(t, a, " - "); split(a[2], b, " "); print b[1]}' /proc/self/mountinfo; }
 state() { grep -o '"state":"[a-z]*"' "$RUN/status.json" 2>/dev/null | cut -d'"' -f4; }
+can_handover() { grep -q '"handover":' "$RUN/status.json" 2>/dev/null; }   # the running one switches in place
 
 # forget draining unwakeds that are gone
 tidy() {
@@ -135,7 +139,7 @@ unwake_status() {
 # and start (a new mount; what used the old one stays on it until it lets go).
 unwake_restart() {
     local out rc
-    if [ "$1" != "--fresh" ] && alive "$(sup_pid)" && grep -q '"handover":' "$RUN/status.json" 2>/dev/null; then
+    if [ "$1" != "--fresh" ] && alive "$(sup_pid)" && can_handover; then
         out=$(unwake_upgrade); rc=$?
         echo "$out"
         [ $rc -eq 0 ] && return 0
@@ -152,14 +156,14 @@ unwake_upgrade() {
     local sup old new mark i
     sup=$(sup_pid)
     alive "$sup" || { echo "unwaked is not running."; return 1; }
-    if ! grep -q '"handover":' "$RUN/status.json" 2>/dev/null; then
+    if ! can_handover; then
         echo "The running Unwake can't switch in place - restart it to use the new version."
         return 2
     fi
     old=$(cat "$RUN/ready" 2>/dev/null)
     mark=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
     kill -USR2 "$sup"
-    for i in $(seq 1 240); do
+    for i in $(seq 1 $((UPGRADE_WAIT * 2))); do
         sleep 0.5
         new=$(cat "$RUN/ready" 2>/dev/null)
         if [ -n "$new" ] && [ "$new" != "$old" ] && alive "$new"; then
@@ -171,7 +175,7 @@ unwake_upgrade() {
             return 1
         fi
     done
-    echo "No answer from Unwake within 2 minutes - see $LOG_FILE"
+    echo "No answer from Unwake within $UPGRADE_WAIT s - see $LOG_FILE"
     return 1
 }
 
@@ -227,7 +231,7 @@ unwake_diag() {
         echo "== Unwake diagnostics $(date '+%F %T')"
         echo "-- versions"
         echo "unwaked: $("$DAEMON" --version 2>&1)"
-        echo "plugin: $(grep -o '<!ENTITY version *"[^"]*"' /boot/config/plugins/unwake.plg 2>/dev/null)"
+        echo "plugin: $(grep -o '<!ENTITY version *"[^"]*"' "$PLG" 2>/dev/null)"
         echo "unraid: $(cat /etc/unraid-version 2>/dev/null)  kernel: $(uname -r)"
         echo "-- status"
         unwake_status
@@ -259,13 +263,14 @@ unwake_diag() {
             grep -vE '\] event |\] readdir hit /( |$)' "$LOG_FILE" 2>/dev/null | tail -n 1500
         fi
         echo "-- verify log (last 400 lines)"
-        tail -n 400 /var/log/unwake-verify.log 2>/dev/null
+        tail -n 400 "$VERIFY_LOG" 2>/dev/null
         # Unspin names the process behind a spin-up that Unwake didn't pass on
-        if [ -f /var/log/unspin.log ]; then
+        local unspin=/var/log/unspin.log
+        if [ -f "$unspin" ]; then
             echo "-- unspin log: spin-ups (last 200 lines)"
-            grep -iE 'spin|waiting' /var/log/unspin.log | tail -n 200
+            grep -iE 'spin|waiting' "$unspin" | tail -n 200
             echo "-- unspin log (last 200 lines)"
-            tail -n 200 /var/log/unspin.log
+            tail -n 200 "$unspin"
         fi
     } > "$out" 2>&1
     echo "Saved to $out"
