@@ -525,6 +525,7 @@ users=$(UNWAKE_RUN="$T/run" UNWAKE_MNT="$T/mnt/user" bash etc/rc.d/rc.unwake use
 echo "$users" | sed 's/^/  users: /'
 check "users names the old instance" grep -q "Detached Unwake (pid $OLDW" <<<"$users"
 check "and the open file holding it" grep -q "pid $$ .*inband.txt" <<<"$users"
+check "and says what kind of use it is" grep -q "pid $$ .*: open .*inband.txt" <<<"$users"
 check "and the namespace started while it ran" grep -q "pid $NS1 .*own namespace" <<<"$users"
 check "but not the one on the live instance" bash -c '! grep -q "pid $1 " <<<"$2"' _ "$NS2" "$users"
 kill "$NS1" "$NS2"; wait "$NS1" "$NS2" 2>/dev/null

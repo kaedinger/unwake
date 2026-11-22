@@ -179,6 +179,18 @@ unwake_upgrade() {
     return 1
 }
 
+# A process's name for people: its command line when the kernel cut the name at 15
+# characters (smbd names itself "smbd[client address]", which gets cut)
+proc_name() {
+    local comm cmd
+    comm=$(cat "$1/comm" 2>/dev/null)
+    if [ ${#comm} -ge 15 ]; then
+        cmd=$(tr '\0' ' ' < "$1/cmdline" 2>/dev/null | sed 's/ *$//')
+        [ -n "$cmd" ] && comm=${cmd:0:100}
+    fi
+    echo "$comm"
+}
+
 # Who still uses a detached unwaked: processes with a file, folder or root on it, and
 # containers or VMs with a bind mount of it in their own mount namespace. The live one
 # (on top of /mnt/user) is left out.
@@ -195,10 +207,19 @@ unwake_users() {
         mm="$(( ((dev >> 8) & 0xfff) | ((dev >> 32) & ~0xfff) )):$(( (dev & 0xff) | ((dev >> 12) & ~0xff) ))"
         echo "Detached Unwake (pid $wpid, started $(date -r "$f" '+%F %T'), device $mm):"
         found=0
+        local name what path share
         for p in /proc/[0-9]*; do
             for x in "$p/cwd" "$p/root" "$p"/fd/*; do
                 [ "$(stat -L -c %d "$x" 2>/dev/null)" = "$dev" ] || continue
-                echo "  pid ${p#/proc/} $(cat "$p/comm" 2>/dev/null): $(readlink "$x" 2>/dev/null)"
+                name=$(proc_name "$p")
+                path=$(readlink "$x" 2>/dev/null)
+                case $x in */cwd) what="current folder" ;; */root) what="root folder" ;; *) what="open" ;; esac
+                echo "  pid ${p#/proc/} $name: $what $path"
+                # smbd sits in a share's folder for as long as a client keeps that share connected, even when idle
+                if [ "$(cat "$p/comm" 2>/dev/null | cut -c1-4)" = smbd ] && [ "$what" = "current folder" ]; then
+                    share=${path#/}; share=${share%%/*}
+                    echo "    an SMB client keeps share ${share:-?} connected; it lets go when the client disconnects, or now with: smbcontrol ${p#/proc/} close-share ${share:-SHARE}"
+                fi
                 found=1
                 break
             done
@@ -215,7 +236,7 @@ unwake_users() {
             while read -r cp cn; do
                 [ "$(readlink "/proc/$cp/ns/mnt" 2>/dev/null)" = "$ns" ] && cname=${cn#/} && break
             done <<< "$(docker ps -q 2>/dev/null | xargs -r docker inspect -f '{{.State.Pid}} {{.Name}}' 2>/dev/null)"
-            echo "  pid ${p#/proc/} $(cat "$p/comm" 2>/dev/null): has it mounted in its own namespace${cname:+ (container $cname)}"
+            echo "  pid ${p#/proc/} $(proc_name "$p"): has it mounted in its own namespace${cname:+ (container $cname)}"
             found=1
         done
         [ $found -eq 0 ] && echo "  nothing found - it should exit on its own shortly"

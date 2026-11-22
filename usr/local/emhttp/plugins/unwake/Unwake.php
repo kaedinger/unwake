@@ -118,7 +118,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
     <button type="button" id="uw-toggle-btn" onclick="uwToggle()"><?= $view['toggle'] ?></button>
     <div id="uw-older-row" style="margin-top:6px;width:var(--uw-col);max-width:100%;<?= $view['older'] ? '' : 'display:none;' ?>">
       <span class="uw-warn" id="uw-older"><?= htmlspecialchars($view['older']) ?></span>
-      <button type="button" onclick="uwUsers(this)" style="display:inline;margin:4px 0 0 6px;padding:2px 10px;min-width:0;">Who uses them?</button>
+      <button type="button" id="uw-older-btn" onclick="uwUsers(this)" style="display:inline;margin:4px 0 0 6px;padding:2px 10px;min-width:0;"><?= htmlspecialchars($view['older_btn']) ?></button>
       <pre id="uw-users" class="uw-users" style="display:none;"></pre>
     </div>
     <div id="uw-restart-row" style="margin-top:6px;<?= ($st['running'] && $view['version'] && $view['version'] !== $version) ? '' : 'display:none;' ?>">
@@ -403,6 +403,8 @@ var UW_INSTALLED = <?= json_encode($version) ?>;
     });
     document.getElementById('uw-older-row').style.display = v.older ? '' : 'none';
     document.getElementById('uw-older').textContent = v.older;
+    var ob = document.getElementById('uw-older-btn');
+    if (ob.dataset.label) ob.dataset.label = v.older_btn; else ob.textContent = v.older_btn;   // while busy: the label it goes back to
     if (!v.older) document.getElementById('uw-users').style.display = 'none';
     var restart = running && v.version && v.version !== UW_INSTALLED;
     document.getElementById('uw-restart-row').style.display = restart ? '' : 'none';

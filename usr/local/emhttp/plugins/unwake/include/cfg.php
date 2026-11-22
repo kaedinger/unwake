@@ -214,8 +214,14 @@ function spin_mark($spinning, $ssd = false) {
 function older_text($older) {
     if (!$older) return '';
     $when = implode(', ', array_map(fn($t) => $t ? fmt_when($t) : '?', $older));
-    return (count($older) === 1 ? 'An older Unwake is' : count($older) . ' older Unwake instances are') .
-           ' still in use (stopped ' . $when . '). Each one exits once nothing uses it any more.';
+    return count($older) === 1
+        ? 'An older Unwake is still in use (stopped ' . $when . '). It exits once nothing uses it any more.'
+        : count($older) . ' older Unwake instances are still in use (stopped ' . $when . '). Each one exits once nothing uses it any more.';
+}
+
+// The button next to it, in the same number
+function older_button($older) {
+    return count($older) === 1 ? 'Who uses it?' : 'Who uses them?';
 }
 
 // Status sections for the page and the poll: summary lines and detail tables (HTML).
@@ -224,7 +230,7 @@ function status_view($st) {
     $v = ['status' => '', 'color' => 'var(--uw-bad)', 'cache' => '', 'cache_detail' => '', 'hits' => '', 'hits_detail' => '',
           'disks' => '', 'verify' => '', 'verify_detail' => '', 'pool_only' => [],
           'toggle' => $st['running'] ? 'Stop Unwake' : 'Start Unwake',
-          'version' => $st['version'] ?? '', 'older' => older_text($st['older'] ?? [])];
+          'version' => $st['version'] ?? '', 'older' => older_text($st['older'] ?? []), 'older_btn' => older_button($st['older'] ?? [])];
     foreach (load_unraid_shares() as $name => $info)
         if ($info['pool_only']) $v['pool_only'][$name] = pool_only_text($name, $st);
     $mt = user_mount_type();
