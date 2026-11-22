@@ -120,35 +120,6 @@ Unwake replaces Dynamix Cache Directories - turn that off under *Settings → Fo
 
 ---
 
-## Project Structure
-
-```
-unwake/
-├── unwake.plg                          # Plugin manifest (install/remove)
-├── src/                                # C++ FUSE daemon (compiled by CI)
-│   ├── main.cpp                        # Supervisor, worker lifecycle, status file
-│   ├── fs.cpp                          # FUSE operations, open files, passthrough
-│   ├── tree.cpp                        # The union directory tree
-│   ├── branches.cpp                    # Disks and pools, spin state, harvester, share exclusions
-│   ├── events.cpp                      # fanotify: changes on every disk and pool
-│   ├── loop.cpp                        # FUSE request loop that can pause
-│   └── handover.{h,cpp}                # In-place updates
-├── patches/                            # libfuse patch for in-place updates
-├── ca/forum-post.md                    # Unraid forum support thread
-├── tests/integration.sh                # CI: loop XFS disks + mergerfs as the shfs stand-in
-├── etc/rc.d/rc.unwake                  # Service script
-└── usr/local/emhttp/plugins/unwake/
-    ├── Unwake.page                     # Unraid page registration
-    ├── Unwake.php                      # Settings UI
-    ├── include/                        # cfg.php (helpers), exec.php (actions), channel.php (beta channel)
-    ├── event/                          # Array start/stop hooks
-    └── unwake.cfg.default              # Default config
-```
-
-CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XFS disks, with mergerfs standing in for shfs.
-
----
-
 ## Configuration Reference
 
 | Key | Default | Description |
@@ -232,7 +203,7 @@ Activity log, an in-place update, stable and beta channel:
 
 ## Building
 
-`make build-daemon package` (needs meson and ninja for libfuse, which is patched and linked statically). Releases are built by CI from tags `YYYY.MM.DD.SECS` (stable, on `main`) and `YYYY.MM.DD.SECS-beta` (on `beta`), as in Unspin.
+`make build-daemon package` (needs meson and ninja for libfuse, which is patched and linked statically). Releases are built by CI from tags `YYYY.MM.DD.SECS` (stable, on `main`) and `YYYY.MM.DD.SECS-beta` (on `beta`), as in Unspin. CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XFS disks, with mergerfs standing in for shfs.
 
 ---
 
