@@ -162,6 +162,11 @@ CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XF
 | `LOG_LEVEL` | `info` | `info` or `debug` |
 | `LOG_MAX_SIZE_MB` | `16` | The log is cut once it grows past this |
 | `LOG_TRIM_SIZE_MB` | `2` | How much of the newest log is kept when it's cut |
+| `VERIFY` | `no` | `yes`: the verifier compares the folders in RAM with the disks and repairs what differs. A beta always verifies |
+| `VERIFY_RATE` | `50` | Folders per second and disk the verifier checks (at least `1`) |
+| `VERIFY_INTERVAL` | `86400` | Seconds from the end of a disk's pass to its next one (`0`: right away) |
+
+The three `VERIFY` keys are not on the settings page; set them in `/boot/config/plugins/unwake/unwake.cfg`, then run `/etc/rc.d/rc.unwake reload`. The verifier needs `HARVEST=yes` and checks a disk only after its folders were read once, and only while it spins anyway and something else is using it, so it never keeps a disk awake. Every difference it finds goes to `/var/log/unwake-verify.log`.
 
 ---
 
