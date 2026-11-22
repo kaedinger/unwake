@@ -39,7 +39,8 @@ static std::mutex _req_mu;
 static std::vector<ShfsReq> _reqs;      // ring
 static size_t _req_next = 0;
 static constexpr size_t REQ_RING = 512;
-static constexpr int64_t REQ_WINDOW = 30000, REQ_WINDOW_WRITE = 120000;
+static constexpr int64_t REQ_WINDOW = 30000, REQ_WINDOW_WRITE = 120000;   // what a spin-up names
+static constexpr size_t XATTR_BUF = 65536;   // the most a name list or value can be (XATTR_LIST_MAX, XATTR_SIZE_MAX)
 
 // Who sent the request being handled on this thread (FUSE gives the caller's thread id),
 // named only with debug logging: "qemu-img 1234, parent php-fpm 99"
@@ -68,15 +69,9 @@ static std::string caller_name(pid_t tid) {
         auto it = cache.find(tid);
         if (it != cache.end() && it->second.first > now - 5000) return it->second.second;
     }
-    pid_t tgid = tid, ppid = 0;
-    {
-        std::ifstream f("/proc/" + std::to_string(tid) + "/status");
-        std::string line;
-        while (std::getline(f, line)) {
-            if (!line.compare(0, 5, "Tgid:")) tgid = (pid_t)atoi(line.c_str() + 5);
-            else if (!line.compare(0, 5, "PPid:")) { ppid = (pid_t)atoi(line.c_str() + 5); break; }
-        }
-    }
+    std::string status = "/proc/" + std::to_string(tid) + "/status";
+    pid_t tgid = (pid_t)proc_status(status, "Tgid:"), ppid = (pid_t)proc_status(status, "PPid:");
+    if (tgid <= 0) tgid = tid;
     std::string comm = proc_line("/proc/" + std::to_string(tgid) + "/comm");
     std::string who = (comm.empty() ? std::string("?") : comm) + " " + std::to_string(tgid);
     if (ppid > 0) {
@@ -136,7 +131,16 @@ static Mask disks_of_dir(const std::string& dir) {
     return m;
 }
 
-static std::string dir_of(const std::string& rel);
+// "12:00:01 lookup media/x -> media/y note [process]"
+static std::string req_line(const ShfsReq& r, const char* time_fmt) {
+    return fmt_time(r.ms / 1000, time_fmt) + " " + r.op + " " + (r.rel.empty() ? "/" : r.rel) +
+           (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note) +
+           (r.who.empty() ? "" : " [" + r.who + "]");
+}
+
+std::string shfs_window() {
+    return "in the " + fmt_secs(REQ_WINDOW / 1000) + " before (writes: " + fmt_secs(REQ_WINDOW_WRITE / 1000) + ")";
+}
 
 std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& holding) {
     std::vector<ShfsReq> v;
@@ -157,8 +161,8 @@ std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& hold
         }
         // shfs looks the path up on every disk: any of them may have to read for it
         bool own = !strcmp(r.op, "readdir") || r.rel.find('/') == std::string::npos;
-        Mask m = disks_of_dir(own ? r.rel : dir_of(r.rel));
-        if (!r.to.empty()) m |= disks_of_dir(dir_of(r.to));
+        Mask m = disks_of_dir(own ? r.rel : path_dir(r.rel));
+        if (!r.to.empty()) m |= disks_of_dir(path_dir(r.to));
         bool on = m & want;
         if (on) holding++;
         hit.push_back({&r, on});
@@ -168,14 +172,7 @@ std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& hold
     std::vector<std::string> out;
     for (size_t i = hit.size() > max ? hit.size() - max : 0; i < hit.size(); i++) {
         auto& r = *hit[i].first;
-        char t[32];
-        time_t s = r.ms / 1000;
-        struct tm tm;
-        localtime_r(&s, &tm);
-        strftime(t, sizeof t, "%H:%M:%S", &tm);
-        out.push_back(std::string(t) + " " + r.op + " " + (r.rel.empty() ? "/" : r.rel) +
-                      (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note) +
-                      (r.who.empty() ? "" : " [" + r.who + "]") +
+        out.push_back(req_line(r, "%H:%M:%S") +
                       (r.mask ? " (straight to " + bname + ")" : hit[i].second ? " (folder on " + bname + ")" : ""));
     }
     return out;
@@ -186,20 +183,12 @@ std::vector<std::string> shfs_recent(const std::string& dir, size_t max) {
     {
         std::lock_guard<std::mutex> l(_req_mu);
         for (auto& r : _reqs)
-            if (dir_of(r.rel) == dir || r.rel == dir || (!r.to.empty() && dir_of(r.to) == dir)) v.push_back(r);
+            if (path_dir(r.rel) == dir || r.rel == dir || (!r.to.empty() && path_dir(r.to) == dir)) v.push_back(r);
     }
     std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.ms < b.ms; });
     std::vector<std::string> out;
     for (size_t i = v.size() > max ? v.size() - max : 0; i < v.size(); i++) {
-        auto& r = v[i];
-        char t[32];
-        time_t s = r.ms / 1000;
-        struct tm tm;
-        localtime_r(&s, &tm);
-        strftime(t, sizeof t, "%m-%d %H:%M:%S", &tm);
-        out.push_back(std::string(t) + " " + r.op + " " + (r.rel.empty() ? "/" : r.rel) +
-                      (r.to.empty() ? "" : " -> " + r.to) + (r.note.empty() ? "" : " " + r.note) +
-                      (r.who.empty() ? "" : " [" + r.who + "]"));
+        out.push_back(req_line(v[i], "%m-%d %H:%M:%S"));
     }
     return out;
 }
@@ -396,14 +385,6 @@ static const char* rp(const std::string& rel) { return rel.empty() ? "." : rel.c
 static std::string proc_path(const std::string& rel) {
     return "/proc/self/fd/" + std::to_string(g_shfs_fd) + (rel.empty() ? "" : "/" + rel);
 }
-static std::string dir_of(const std::string& rel) {
-    auto s = rel.rfind('/');
-    return s == std::string::npos ? "" : rel.substr(0, s);
-}
-static std::string base_of(const std::string& rel) {
-    auto s = rel.rfind('/');
-    return s == std::string::npos ? rel : rel.substr(s + 1);
-}
 static bool caching_for(const std::string& rel) { return g_caching && tree_cacheable(rel); }
 
 // Where a request for rel goes when RAM can't answer it: shfs, or - for a share kept on
@@ -456,9 +437,9 @@ static int cache_get(const std::string& rel, Attr& a) {
     bool top = rel.find('/') == std::string::npos;
     if (rel.empty() || !g_caching || (!top && !caching_for(rel))) return -1;
     std::shared_lock<std::shared_mutex> l(g_tree.mu);
-    DirNode* d = tree_find(dir_of(rel));
+    DirNode* d = tree_find(path_dir(rel));
     if (!d) return -1;
-    auto it = d->entries.find(base_of(rel));
+    auto it = d->entries.find(path_base(rel));
     if (it != d->entries.end()) {
         if (!it->second.has_attr) return -1;
         a = it->second.attr;
@@ -478,11 +459,11 @@ static uint64_t cache_gen(const std::string& dir) {
 static void cache_put(const std::string& rel, const struct stat& st, uint64_t gen0) {
     if (rel.empty() || !caching_for(rel)) return;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
-    auto dir = dir_of(rel);
+    auto dir = path_dir(rel);
     DirNode* d = tree_find(dir);
     if (!d) d = tree_ensure(dir, 0);
-    else if (d->gen != gen0 && !d->entries.count(base_of(rel))) return;
-    auto r = d->entries.try_emplace(base_of(rel));
+    else if (d->gen != gen0 && !d->entries.count(path_base(rel))) return;
+    auto r = d->entries.try_emplace(path_base(rel));
     Entry& e = r.first->second;
     if (r.second) g_tree.entries++;
     e.attr.from(st);
@@ -500,9 +481,9 @@ static void cache_put(const std::string& rel, const struct stat& st, uint64_t ge
 static void cache_update(const std::string& rel, const struct stat& st) {
     if (rel.empty() || !caching_for(rel)) return;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
-    DirNode* d = tree_find(dir_of(rel));
+    DirNode* d = tree_find(path_dir(rel));
     if (!d) return;
-    auto it = d->entries.find(base_of(rel));
+    auto it = d->entries.find(path_base(rel));
     if (it == d->entries.end()) return;
     Entry& e = it->second;
     e.attr.from(st);
@@ -517,47 +498,47 @@ static void cache_update(const std::string& rel, const struct stat& st) {
 static void cache_removed(const std::string& rel) {
     if (rel.empty()) return;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
-    DirNode* d = tree_find(dir_of(rel));
+    DirNode* d = tree_find(path_dir(rel));
     if (!d) return;
-    auto it = d->entries.find(base_of(rel));
+    auto it = d->entries.find(path_base(rel));
     if (it == d->entries.end()) return;
     if (__builtin_popcountll(it->second.mask) > 1) {
         d->pt_complete = false;              // shfs may have removed only one copy
         d->gen++;
         return;
     }
-    tree_erase(d, base_of(rel));
+    tree_erase(d, path_base(rel));
 }
 
 static void cache_xattrs_unknown(const std::string& rel) {
     if (rel.empty()) return;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
-    DirNode* d = tree_find(dir_of(rel));
+    DirNode* d = tree_find(path_dir(rel));
     if (!d) return;
-    auto it = d->entries.find(base_of(rel));
+    auto it = d->entries.find(path_base(rel));
     if (it != d->entries.end()) it->second.xattrs.reset();
 }
 
 static void cache_renamed(const std::string& from, const std::string& to, bool exchange) {
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
-    DirNode* d1 = tree_find(dir_of(from));
-    DirNode* d2 = tree_find(dir_of(to));
+    DirNode* d1 = tree_find(path_dir(from));
+    DirNode* d2 = tree_find(path_dir(to));
     if (exchange) {
-        for (auto& p : {std::make_pair(d1, base_of(from)), std::make_pair(d2, base_of(to))})
+        for (auto& p : {std::make_pair(d1, path_base(from)), std::make_pair(d2, path_base(to))})
             if (p.first) { tree_erase(p.first, p.second); p.first->pt_complete = false; }
         return;
     }
     // fanotify may have applied this rename already (MOVED_FROM/TO read before we got
     // here): then the source is gone and the target is in place - leave it as it is
-    auto nh = d1 ? d1->entries.extract(base_of(from)) : decltype(d1->entries.extract(""))();
+    auto nh = d1 ? d1->entries.extract(path_base(from)) : decltype(d1->entries.extract(""))();
     if (d1) d1->gen++;
     if (nh.empty()) {
-        if (d2 && !d2->entries.count(base_of(to))) d2->pt_complete = false;   // a name we know nothing about
+        if (d2 && !d2->entries.count(path_base(to))) d2->pt_complete = false;   // a name we know nothing about
         return;
     }
-    if (d2) tree_erase(d2, base_of(to));
+    if (d2) tree_erase(d2, path_base(to));
     if (!d2) { tree_count_add(nh.mapped(), -1); return; }
-    nh.key() = base_of(to);
+    nh.key() = path_base(to);
     auto ins = d2->entries.insert(std::move(nh));
     Entry& e = ins.position->second;
     if (e.dir) { e.dir->parent = d2; e.dir->name = &ins.position->first; }
@@ -592,7 +573,7 @@ static void op_lookup(fuse_req_t req, fuse_ino_t parent, const char* name) {
         if (!strcmp(name, "..")) {
             std::lock_guard<std::mutex> l(_nmu);
             target = parent == FUSE_ROOT_ID ? FUSE_ROOT_ID : _nodes[parent].parent;
-            rel = dir_of(prel);
+            rel = path_dir(prel);
         }
         struct stat st;
         if (fstatat(g_shfs_fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW) != 0) return (void)fuse_reply_err(req, errno);
@@ -698,7 +679,7 @@ static void op_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
         }
         auto v = via(rel);
         if (!rel.empty()) { g_stats.getattr_miss++; note_via("getattr", rel, v); }
-        auto gen0 = cache_gen(dir_of(rel));
+        auto gen0 = cache_gen(path_dir(rel));
         if (fstatat(v.fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW) != 0) return (void)fuse_reply_err(req, errno);
         cache_put(rel, st, gen0);
     }
@@ -764,7 +745,7 @@ static void created(fuse_req_t req, fuse_ino_t parent, const std::string& rel, c
         fuse_reply_err(req, errno);
         return;
     }
-    cache_put(rel, st, cache_gen(dir_of(rel)));
+    cache_put(rel, st, cache_gen(path_dir(rel)));
     if (fd < 0) reply_entry(req, parent, name, st);
 }
 
@@ -860,9 +841,9 @@ static void op_rename(fuse_req_t req, fuse_ino_t parent, const char* name, fuse_
 static int direct_branch(const std::string& rel) {
     if (!g_cfg.direct_reads || rel.empty() || !caching_for(rel) || !g_tree.per_branch) return -1;
     std::shared_lock<std::shared_mutex> l(g_tree.mu);
-    DirNode* d = tree_find(dir_of(rel));
+    DirNode* d = tree_find(path_dir(rel));
     if (!d) return -1;
-    auto it = d->entries.find(base_of(rel));
+    auto it = d->entries.find(path_base(rel));
     if (it == d->entries.end() || !it->second.mask || it->second.is_dir) return -1;
     for (size_t i = 0; i < g_branches.size() && i < (size_t)MAX_BRANCHES; i++) {
         Mask b = bit((int)i);
@@ -1192,9 +1173,9 @@ static void op_statfs(fuse_req_t req, fuse_ino_t ino) {
 static int xattrs_of(const std::string& rel, Xattrs& out) {
     if (!rel.empty() && caching_for(rel)) {
         std::shared_lock<std::shared_mutex> l(g_tree.mu);
-        DirNode* d = tree_find(dir_of(rel));
+        DirNode* d = tree_find(path_dir(rel));
         if (d) {
-            auto it = d->entries.find(base_of(rel));
+            auto it = d->entries.find(path_base(rel));
             if (it != d->entries.end() && it->second.xattrs) {
                 out = *it->second.xattrs;
                 g_stats.xattr_hit++;
@@ -1205,20 +1186,20 @@ static int xattrs_of(const std::string& rel, Xattrs& out) {
     g_stats.xattr_miss++;
     auto v = via(rel);
     note_via("xattr", rel, v);
-    auto gen0 = rel.empty() ? 0 : cache_gen(dir_of(rel));
+    auto gen0 = rel.empty() ? 0 : cache_gen(path_dir(rel));
     int err = 0;
     auto xs = read_xattrs(via_path(v, rel), &err);
     if (err) return err;
     if (!xs) {      // too big to keep: read them for this caller only
         out.clear();
         auto p = via_path(v, rel);
-        std::vector<char> names(65536);
+        std::vector<char> names(XATTR_BUF);
         ssize_t n = llistxattr(p.c_str(), names.data(), names.size());
         if (n < 0) return errno;
         for (ssize_t i = 0; i < n;) {
             std::string name(&names[(size_t)i]);
             i += (ssize_t)name.size() + 1;
-            std::vector<char> v(65536);
+            std::vector<char> v(XATTR_BUF);
             ssize_t m = lgetxattr(p.c_str(), name.c_str(), v.data(), v.size());
             if (m >= 0) out.emplace_back(name, std::string(v.data(), (size_t)m));
         }
@@ -1227,9 +1208,9 @@ static int xattrs_of(const std::string& rel, Xattrs& out) {
     out = *xs;
     if (rel.empty() || !caching_for(rel)) return 0;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
-    DirNode* d = tree_find(dir_of(rel));
+    DirNode* d = tree_find(path_dir(rel));
     if (!d || d->gen != gen0) return 0;
-    auto it = d->entries.find(base_of(rel));
+    auto it = d->entries.find(path_base(rel));
     if (it != d->entries.end()) it->second.xattrs = xs;
     return 0;
 }
@@ -1251,11 +1232,11 @@ static bool location_from_tree(const std::string& rel, bool all, std::string& ou
     }
     if (rel.empty() || !g_caching || (!top && !caching_for(rel)) || !g_tree.per_branch) return false;
     std::shared_lock<std::shared_mutex> l(g_tree.mu);
-    DirNode* d = tree_find(dir_of(rel));
+    DirNode* d = tree_find(path_dir(rel));
     if (!d) return false;
     bool complete = d == &g_tree.root ? (d->known & g_tree.all) == g_tree.all : tree_all_known(d);
     if (!complete) return false;
-    auto it = d->entries.find(base_of(rel));
+    auto it = d->entries.find(path_base(rel));
     if (it == d->entries.end() || !it->second.mask) return false;
     out.clear();
     for (size_t i = 0; i < g_branches.size() && i < (size_t)MAX_BRANCHES; i++) {
@@ -1309,7 +1290,7 @@ static void op_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size) {
     if (!path_of(ino, rel)) return (void)fuse_reply_err(req, ENOENT);
     std::string names;
     if (rel.empty()) {
-        std::vector<char> v(65536);
+        std::vector<char> v(XATTR_BUF);
         ssize_t n = listxattr(proc_path("").c_str(), v.data(), v.size());
         if (n < 0) return (void)fuse_reply_err(req, errno);
         names.assign(v.data(), (size_t)n);

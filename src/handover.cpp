@@ -20,6 +20,11 @@
 #include <unistd.h>
 
 static constexpr size_t FDS_PER_MSG = 250;
+// how long one side waits for the other
+static constexpr int ANSWER_MS = 60000;    // a step: getting ready, taking the state in, confirming
+static constexpr int STATE_MS  = 120000;   // the old one finishing its requests and writing the state
+static constexpr int FDS_MS    = 30000;    // the next batch of open files
+static constexpr int PAUSE_MS  = 15000;    // requests in progress, before the old one gives up and serves on
 
 static bool send_msg(int sock, const std::string& text, const int* fds = nullptr, size_t n = 0) {
     struct iovec iov = {(void*)text.data(), text.size()};
@@ -83,7 +88,7 @@ static bool starts(const std::string& s, const char* p) { return s.compare(0, st
 bool handover_send(int sock, struct fuse_session* se, const HoMount& m) {
     std::string msg;
     std::vector<int> fds;
-    if (!recv_msg(sock, msg, fds, 60000) || !starts(msg, "ready ")) {
+    if (!recv_msg(sock, msg, fds, ANSWER_MS) || !starts(msg, "ready ")) {
         log_err("Upgrade: the new Unwake didn't get ready" + (msg.empty() ? std::string() : " (" + msg + ")") + " - this one serves on");
         return false;
     }
@@ -104,8 +109,8 @@ bool handover_send(int sock, struct fuse_session* se, const HoMount& m) {
         events_resume();
         if (g_caching) harvester_start();
     };
-    if (!loop_pause(15000)) {
-        log_err("Upgrade: requests still in progress after 15 s - this one serves on, try again later");
+    if (!loop_pause(PAUSE_MS)) {
+        log_err("Upgrade: requests still in progress after " + fmt_secs(PAUSE_MS / 1000) + " - this one serves on, try again later");
         send_msg(sock, "abort");
         resume();
         return false;
@@ -148,7 +153,7 @@ bool handover_send(int sock, struct fuse_session* se, const HoMount& m) {
         ok = send_msg(sock, "fds", w.fds.data() + i, std::min(FDS_PER_MSG, w.fds.size() - i));
     msg.clear();
     fds.clear();
-    if (ok) ok = recv_msg(sock, msg, fds, 60000);
+    if (ok) ok = recv_msg(sock, msg, fds, ANSWER_MS);
     for (int f : fds) close(f);
     if (!ok || msg != "ok") {
         log_err("Upgrade: the new Unwake couldn't take over" + (msg.empty() ? std::string(" (no answer)") : " (" + msg + ")") +
@@ -185,7 +190,7 @@ bool handover_receive(int sock, struct fuse_session* se, HoMount& m, const std::
     }
     std::string msg;
     std::vector<int> fds;
-    if (!recv_msg(sock, msg, fds, 120000) || !starts(msg, "state ") || fds.size() != 1) {
+    if (!recv_msg(sock, msg, fds, STATE_MS) || !starts(msg, "state ") || fds.size() != 1) {
         log_err("Upgrade: the running Unwake didn't send its state" + (msg.empty() ? std::string() : " (" + msg + ")"));
         for (int f : fds) close(f);
         return false;
@@ -198,7 +203,7 @@ bool handover_receive(int sock, struct fuse_session* se, HoMount& m, const std::
     r.format = format;
     while (r.fds.size() < nfds) {
         std::vector<int> got;
-        if (!recv_msg(sock, msg, got, 30000) || msg != "fds") {
+        if (!recv_msg(sock, msg, got, FDS_MS) || msg != "fds") {
             for (int f : got) close(f);
             close(mfd);
             return fail(sock, "fds cut short");
@@ -245,7 +250,7 @@ bool handover_receive(int sock, struct fuse_session* se, HoMount& m, const std::
     if (!send_msg(sock, "ok")) return false;
     msg.clear();
     fds.clear();
-    if (!recv_msg(sock, msg, fds, 60000) || msg != "bye") {
+    if (!recv_msg(sock, msg, fds, ANSWER_MS) || msg != "bye") {
         log_err("Upgrade: the running Unwake " + (msg == "abort" ? std::string("serves on") : "didn't confirm") + " - this one exits");
         return false;
     }

@@ -28,6 +28,8 @@
 #include <unistd.h>
 
 static constexpr int64_t CONFIRM_MS = 5000;           // second look after a difference
+static constexpr int64_t RETRY_MS = 60000;            // a folder that couldn't be checked or repaired: again then
+static constexpr int64_t IDLE_MS = 60000;             // a disk nobody else used for this long: let it spin down
 static constexpr off_t   LOG_MAX = 4 << 20, LOG_KEEP = 1 << 20;
 
 // per disk, the current pass only (or the last one, until the next starts)
@@ -64,21 +66,10 @@ std::string verify_json(int b) {
 static void vlog(const std::string& text) {
     std::lock_guard<std::mutex> l(_mu);
     struct stat st;
-    if (stat(g_cfg.verify_log.c_str(), &st) == 0 && st.st_size > LOG_MAX) {
-        std::ifstream in(g_cfg.verify_log, std::ios::binary);
-        in.seekg(st.st_size - LOG_KEEP);
-        std::string rest((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        auto nl = rest.find('\n');
-        std::ofstream out(g_cfg.verify_log, std::ios::binary | std::ios::trunc);
-        out << "(older entries cut)\n" << (nl == std::string::npos ? rest : rest.substr(nl + 1));
-    }
-    char t[32];
-    time_t now = time(nullptr);
-    struct tm tm;
-    localtime_r(&now, &tm);
-    strftime(t, sizeof t, "%Y-%m-%d %H:%M:%S", &tm);
+    if (stat(g_cfg.verify_log.c_str(), &st) == 0 && st.st_size > LOG_MAX)
+        cut_to_tail(g_cfg.verify_log, LOG_KEEP, "(older entries cut)\n");
     std::ofstream out(g_cfg.verify_log, std::ios::app);
-    out << t << " " << text << "\n";
+    out << fmt_time(time(nullptr)) << " " << text << "\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -226,8 +217,7 @@ static void test_plant() {
         int b = -1;
         for (size_t i = 0; i < g_branches.size(); i++) if (g_branches[i]->name == disk) b = (int)i;
         if (b < 0) continue;
-        auto slash = rel.rfind('/');
-        std::string dir = slash == std::string::npos ? "" : rel.substr(0, slash), name = rel.substr(slash + 1);
+        std::string dir = path_dir(rel), name = path_base(rel);
         std::unique_lock<std::shared_mutex> l(g_tree.mu);
         DirNode* d = tree_find(dir);
         if (!d) continue;
@@ -325,8 +315,7 @@ static Outcome check(int b, const std::string& rel, std::vector<std::string>* su
 }
 
 static void verify_thread(int b) {
-    syscall(SYS_ioprio_set, 1 /* IOPRIO_WHO_PROCESS */, (int)syscall(SYS_gettid), (3 << 13) /* IDLE */);
-    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
+    background_priority();
     Branch& br = *g_branches[b];
     VState& s = _st[b];
     std::vector<std::string> stack;
@@ -349,7 +338,7 @@ static void verify_thread(int b) {
         if (watch_io) {
             uint64_t io = dev_ios(br);
             if (io != last_io) { other_at = now_ms(); last_io = io; }
-            if (now_ms() - other_at > 60000) can = false;   // nobody else: let it spin down
+            if (now_ms() - other_at > IDLE_MS) can = false;
         }
         if (!can) {
             if (in_pass || !s.done_at) s.state = V_WAITING;
@@ -362,7 +351,7 @@ static void verify_thread(int b) {
             uint64_t n = 0;
             Outcome o = check(b, r->rel, nullptr, n, true);
             if (watch_io) last_io = dev_ios(br);        // that was us
-            if (o == FAILED || o == UNSURE) r->due = now_ms() + 60000;
+            if (o == FAILED || o == UNSURE) r->due = now_ms() + RETRY_MS;
             else {                          // repaired now, or right by itself meanwhile
                 s.repaired += r->n;
                 s.pending -= r->n;
@@ -401,7 +390,7 @@ static void verify_thread(int b) {
             Outcome o = check(b, rel, &subdirs, n, false);
             if (watch_io) last_io = dev_ios(br);        // that was us
             if (o == REPAIRED) { s.found += n; s.repaired += n; }
-            else if (o == FAILED) { s.found += n; s.pending += n; retries.push_back({rel, now_ms() + 60000, n}); }
+            else if (o == FAILED) { s.found += n; s.pending += n; retries.push_back({rel, now_ms() + RETRY_MS, n}); }
             if (o != SKIPPED) s.checked++;
             std::sort(subdirs.rbegin(), subdirs.rend());
             for (auto& d : subdirs) stack.push_back(std::move(d));

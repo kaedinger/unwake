@@ -43,25 +43,10 @@
 static volatile sig_atomic_t _sig_stop = 0, _sig_array = 0, _sig_reload = 0;
 static std::string _version = UNWAKE_VERSION;
 
-struct TopMount { int id = -1; std::string fstype, source; unsigned major = 0, minor = 0; };
-
-// the mount currently on top at path (last in mountinfo)
-static TopMount top_mount(const std::string& path) {
-    TopMount t;
-    std::ifstream f("/proc/self/mountinfo");
-    std::string line;
-    while (std::getline(f, line)) {
-        std::istringstream ss(line);
-        std::string id, parent, devno, root, mp, opts, tok;
-        ss >> id >> parent >> devno >> root >> mp >> opts;
-        if (mp != path) continue;
-        while (ss >> tok && tok != "-") {}
-        TopMount m;
-        m.id = std::stoi(id);
-        ss >> m.fstype >> m.source;
-        sscanf(devno.c_str(), "%u:%u", &m.major, &m.minor);
-        t = m;
-    }
+// the mount currently on top at path (the last one there); id -1: nothing mounted
+static MountInfo top_mount(const std::string& path) {
+    MountInfo t;
+    for (auto& m : mountinfo()) if (m.mountpoint == path) t = m;
     return t;
 }
 
@@ -104,13 +89,7 @@ static long kept_free_kb() {
     int64_t now = now_ms();
     if (at && now - at < 30000) return kept;     // mallinfo2 walks the free chunks under the arena locks
     at = now;
-    long anon = 0;
-    {
-        std::ifstream f("/proc/self/status");
-        std::string line;
-        while (std::getline(f, line))
-            if (!line.compare(0, 8, "RssAnon:")) { anon = atol(line.c_str() + 8); break; }
-    }
+    long anon = proc_status("/proc/self/status", "RssAnon:");
     struct mallinfo2 mi = mallinfo2();
     long used = (long)((mi.uordblks + mi.hblkhd) / 1024);
     kept = anon > used ? anon - used : 0;
@@ -120,13 +99,16 @@ static long kept_free_kb() {
 // RETURN_RAM=yes: once the kernel has forgotten many names (after the nightly backup's
 // inodes aged out of its cache), give the freed memory back to the system. Not while
 // it's still forgetting, and at most every 5 minutes; malloc_trim takes some ms.
+// (The settings page's help for Return Freed RAM names these numbers.)
+static constexpr uint64_t TRIM_AFTER_NAMES = 100000;
+static constexpr int64_t  TRIM_QUIET_MS = 10000, TRIM_EVERY_MS = 300000;
 static void trim_ram() {
     static uint64_t at_trim = 0, seen = 0;
     static int64_t last_trim = 0, last_change = 0;
     uint64_t f = g_nodes_forgotten;
     int64_t now = now_ms();
     if (f != seen) { seen = f; last_change = now; return; }
-    if (f - at_trim < 100000 || now - last_change < 10000 || now - last_trim < 300000) return;
+    if (f - at_trim < TRIM_AFTER_NAMES || now - last_change < TRIM_QUIET_MS || now - last_trim < TRIM_EVERY_MS) return;
     long before = rss_kb();
     malloc_trim(0);
     log_debug("Returned freed RAM: " + std::to_string((before - rss_kb()) / 1024) + " MB, after the kernel forgot " +
@@ -241,7 +223,7 @@ static int  _adopt_fd = -1;    // new worker of an upgrade: socket to the old on
 static bool _handed_over = false;
 
 // a new unwaked of an in-place upgrade: take the running connection over
-static struct fuse_session* adopt(struct fuse_args* args, TopMount& mine, time_t& started) {
+static struct fuse_session* adopt(struct fuse_args* args, MountInfo& mine, time_t& started) {
     if (!branches_load()) { log_err("Upgrade: no disks or pools found - not taking over"); return nullptr; }
     auto se = fuse_session_new(args, fs_ops(), sizeof(struct fuse_lowlevel_ops), nullptr);
     if (!se) { log_err("fuse_session_new failed"); return nullptr; }
@@ -262,7 +244,7 @@ static struct fuse_session* adopt(struct fuse_args* args, TopMount& mine, time_t
 }
 
 // a fresh start: mount on top of shfs
-static struct fuse_session* mount_new(struct fuse_args* args, TopMount& mine) {
+static struct fuse_session* mount_new(struct fuse_args* args, MountInfo& mine) {
     auto below = top_mount(g_cfg.mountpoint);
     if (below.fstype == "fuse.unwake") {
         log_err(g_cfg.mountpoint + " already has Unwake on top - not stacking a second one");
@@ -335,7 +317,7 @@ static int worker() {
         std::vector<std::string> warn;
         bool ok = load_config(warn);
         for (auto& w : warn) (ok ? log_warn : log_err)(w);
-        if (!ok) { log_err("No settings - not starting"); return adopting ? 4 : 1; }
+        if (!ok) { log_err("No settings - not starting"); return adopting ? EXIT_NOT_TAKEN_OVER : EXIT_NOT_STARTED; }
     }
     log_info("unwaked " + _version + (adopting ? " taking over " + g_cfg.mountpoint + " from the running Unwake" : " starting on " + g_cfg.mountpoint) +
              " (pid " + std::to_string(getpid()) + ")");
@@ -343,9 +325,9 @@ static int worker() {
     std::string opts = "-oallow_other,default_permissions,fsname=unwake,subtype=unwake,noatime";
     const char* argv[] = {"unwaked", opts.c_str(), nullptr};
     struct fuse_args args = FUSE_ARGS_INIT(2, (char**)argv);
-    TopMount mine;
+    MountInfo mine;
     auto se = adopting ? adopt(&args, mine, started) : mount_new(&args, mine);
-    if (!se) return adopting ? 4 : 1;
+    if (!se) return adopting ? EXIT_NOT_TAKEN_OVER : EXIT_NOT_STARTED;
     {   // mount id (the supervisor detaches only this one) and device (diag finds who still uses it)
         // never stat() our own mount here: the request loop isn't running yet, it would hang
         unsigned long dev = (unsigned long)makedev(mine.major, mine.minor);
@@ -356,14 +338,17 @@ static int worker() {
     if (g_caching) harvester_start();
 
     // housekeeping: spin state, status file, signals, array stop, upgrade requests
+    static constexpr int TICK_MS = 250;
+    static constexpr int64_t ARRAY_STOP_CUT_MS = 10000;   // array stop: what still uses a detached one is cut off
     std::atomic<bool> loop_done{false};
     std::thread house([&] {
         std::string state = "running";
         int64_t detached_at = 0;
         bool aborted = false;
         int tick = 0;
+        auto every = [&](int ms) { return tick % (ms / TICK_MS) == 0; };
         while (!loop_done) {
-            usleep(250 * 1000);
+            usleep(TICK_MS * 1000);
             tick++;
             if (!detached_at && !_sig_stop) {
                 int ho = ctl_poll_upgrade(_ctl_fd);
@@ -377,7 +362,7 @@ static int worker() {
                 }
             }
             if (_sig_reload) { _sig_reload = 0; reload_settings(); }
-            if (g_cfg.return_ram && tick % 4 == 0) trim_ram();
+            if (g_cfg.return_ram && every(1000)) trim_ram();
             bool stopping_array = array_stopping();
             if ((_sig_stop || stopping_array) && !detached_at) {
                 auto t = top_mount(g_cfg.mountpoint);
@@ -400,7 +385,7 @@ static int worker() {
                     tree_clear_all();
                 }
             }
-            if (detached_at && !aborted && (_sig_array || stopping_array) && now_ms() - detached_at > 10000) {
+            if (detached_at && !aborted && (_sig_array || stopping_array) && now_ms() - detached_at > ARRAY_STOP_CUT_MS) {
                 // array stop: Unraid must be able to unmount shfs; cut the stragglers off
                 log_warn("Still in use 10s after detaching - closing the connection for the array stop");
                 char p[128];
@@ -410,9 +395,9 @@ static int worker() {
                 fuse_session_exit(se);
                 aborted = true;
             }
-            if (!detached_at && tick % 8 == 0) { spin_poll(); if (g_caching) recompute_exclusions(); }
+            if (!detached_at && every(2000)) { spin_poll(); if (g_caching) recompute_exclusions(); }
             // a detached unwaked stays quiet: a new one may run already and own the status files
-            if (!detached_at && tick % 8 == 0) write_status(state, started);
+            if (!detached_at && every(2000)) write_status(state, started);
         }
     });
 
@@ -570,7 +555,7 @@ static int supervisor(pid_t adopt_child) {
         if (_child_ctl >= 0) { close(_child_ctl); _child_ctl = -1; }
         if (_pending > 0) { kill(_pending, SIGKILL); }   // its old worker is gone: nothing to take over
         if (WIFEXITED(st) && WEXITSTATUS(st) == 0) return 0;
-        if (WIFEXITED(st) && WEXITSTATUS(st) == 1) return 1;     // didn't start: nothing mounted
+        if (WIFEXITED(st) && WEXITSTATUS(st) == EXIT_NOT_STARTED) return 1;     // nothing mounted
         // crashed: the dead mount answers ENOTCONN to everyone - take it away now
         std::string why = WIFSIGNALED(st) ? std::string("signal ") + strsignal(WTERMSIG(st))
                                           : "exit code " + std::to_string(WEXITSTATUS(st));

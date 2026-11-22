@@ -6,7 +6,9 @@
 #include <optional>
 #include <sstream>
 #include <cstring>
+#include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 Config            g_cfg;
@@ -32,19 +34,7 @@ static void log_trim_locked() {
     struct stat st;
     if (_log_file.empty() || stat(_log_file.c_str(), &st) != 0) return;
     if (st.st_size <= g_cfg.log_max_mb * 1024 * 1024) return;
-    long keep = g_cfg.log_trim_mb * 1024 * 1024;
-    std::ifstream in(_log_file, std::ios::binary);
-    if (!in) return;
-    in.seekg(st.st_size - keep);
-    std::string tail((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    auto nl = tail.find('\n');
-    if (nl != std::string::npos) tail.erase(0, nl + 1);
-    auto tmp = _log_file + ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        out << tail;
-    }
-    if (rename(tmp.c_str(), _log_file.c_str()) == 0 && _log) {
+    if (cut_to_tail(_log_file, g_cfg.log_trim_mb * 1024 * 1024) && _log) {
         fclose(_log);
         _log = fopen(_log_file.c_str(), "a");
     }
@@ -52,13 +42,10 @@ static void log_trim_locked() {
 
 static void vlog(const char* level, const std::string& m) {
     time_t now = time(nullptr);
-    struct tm tm;
-    localtime_r(&now, &tm);
-    char ts[32];
-    strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tm);
+    std::string ts = fmt_time(now);
     std::lock_guard<std::mutex> l(_log_mu);
     FILE* f = _log ? _log : stderr;
-    fprintf(f, "%s [%s] %s\n", ts, level, m.c_str());
+    fprintf(f, "%s [%s] %s\n", ts.c_str(), level, m.c_str());
     fflush(f);
     if (now - _log_checked >= 60) {
         _log_checked = now;
@@ -96,6 +83,16 @@ std::string join_path(const std::string& dir, const std::string& name) {
     return dir.empty() ? name : dir + "/" + name;
 }
 
+std::string path_dir(const std::string& rel) {
+    auto s = rel.rfind('/');
+    return s == std::string::npos ? "" : rel.substr(0, s);
+}
+
+std::string path_base(const std::string& rel) {
+    auto s = rel.rfind('/');
+    return s == std::string::npos ? rel : rel.substr(s + 1);
+}
+
 std::string human_count(uint64_t n) {
     char b[32];
     if (n >= 10000000) snprintf(b, sizeof b, "%.0fM", n / 1e6);
@@ -105,12 +102,92 @@ std::string human_count(uint64_t n) {
     return b;
 }
 
+// "1h 5m", "2h", "3m 10s", "2m", "45s"
 std::string fmt_secs(long s) {
-    char b[32];
-    if (s >= 3600) snprintf(b, sizeof b, "%ldh %ldm", s / 3600, s % 3600 / 60);
-    else if (s >= 60) snprintf(b, sizeof b, "%ldm %lds", s / 60, s % 60);
-    else snprintf(b, sizeof b, "%lds", s);
+    auto part = [](long n, const char* unit) { return std::to_string(n) + unit; };
+    if (s >= 3600) return part(s / 3600, "h") + (s % 3600 >= 60 ? " " + part(s % 3600 / 60, "m") : "");
+    if (s >= 60) return part(s / 60, "m") + (s % 60 ? " " + part(s % 60, "s") : "");
+    return part(s, "s");
+}
+
+std::string fmt_time(time_t t, const char* fmt) {
+    struct tm tm;
+    localtime_r(&t, &tm);
+    char b[64];
+    strftime(b, sizeof b, fmt, &tm);
     return b;
+}
+
+static std::string unquote(const std::string& v) {
+    return v.size() >= 2 && v.front() == '"' && v.back() == '"' ? v.substr(1, v.size() - 2) : v;
+}
+
+std::unordered_map<std::string, IniSection> read_ini(const std::string& file) {
+    std::unordered_map<std::string, IniSection> out;
+    std::ifstream f(file);
+    std::string line, sec;
+    while (std::getline(f, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') continue;
+        if (line.front() == '[' && line.back() == ']') { sec = unquote(line.substr(1, line.size() - 2)); continue; }
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        out[sec][trim(line.substr(0, eq))] = unquote(trim(line.substr(eq + 1)));
+    }
+    return out;
+}
+
+std::vector<MountInfo> mountinfo() {
+    std::vector<MountInfo> out;
+    std::ifstream f("/proc/self/mountinfo");
+    std::string line;
+    while (std::getline(f, line)) {
+        std::istringstream ss(line);
+        std::string id, parent, devno, root, mp, tok;
+        ss >> id >> parent >> devno >> root >> mp;
+        MountInfo m;
+        m.id = atoi(id.c_str());
+        sscanf(devno.c_str(), "%u:%u", &m.major, &m.minor);
+        for (size_t i = 0; i < mp.size(); i++) {   // blanks and the like come as \040
+            if (mp[i] == '\\' && i + 3 < mp.size()) { m.mountpoint += (char)strtol(mp.substr(i + 1, 3).c_str(), nullptr, 8); i += 3; }
+            else m.mountpoint += mp[i];
+        }
+        while (ss >> tok && tok != "-") {}
+        ss >> m.fstype >> m.source;
+        out.push_back(std::move(m));
+    }
+    return out;
+}
+
+long proc_status(const std::string& file, const char* key) {
+    std::ifstream f(file);
+    std::string line;
+    size_t n = strlen(key);
+    while (std::getline(f, line))
+        if (!line.compare(0, n, key)) return atol(line.c_str() + n);
+    return 0;
+}
+
+bool cut_to_tail(const std::string& file, off_t keep, const std::string& marker) {
+    struct stat st;
+    if (stat(file.c_str(), &st) != 0 || st.st_size <= keep) return false;
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return false;
+    in.seekg(st.st_size - keep);
+    std::string tail((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    auto nl = tail.find('\n');
+    if (nl != std::string::npos) tail.erase(0, nl + 1);
+    auto tmp = file + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out << marker << tail;
+    }
+    return rename(tmp.c_str(), file.c_str()) == 0;
+}
+
+void background_priority() {
+    syscall(SYS_ioprio_set, 1 /* IOPRIO_WHO_PROCESS */, (int)syscall(SYS_gettid), (3 << 13) /* IOPRIO_CLASS_IDLE */);
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
 }
 
 int64_t now_ms() {
@@ -124,24 +201,10 @@ int64_t now_ms() {
 // with unwake.cfg (as the settings page saved it) over it. An invalid saved value is
 // reported and the default used.
 // ---------------------------------------------------------------------------
-static std::unordered_map<std::string, std::string> read_kv(const std::string& file) {
-    std::unordered_map<std::string, std::string> kv;
-    std::ifstream f(file);
-    std::string line;
-    while (std::getline(f, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#') continue;
-        auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        auto v = trim(line.substr(eq + 1));
-        if (v.size() >= 2 && v.front() == '"' && v.back() == '"') v = v.substr(1, v.size() - 2);
-        kv[trim(line.substr(0, eq))] = v;
-    }
-    return kv;
-}
+static IniSection read_kv(const std::string& file) { return read_ini(file)[""]; }
 
 namespace {
-using KV = std::unordered_map<std::string, std::string>;
+using KV = IniSection;
 
 // One setting: the saved value if it is valid, else the default. parse: value -> optional result
 struct Settings {

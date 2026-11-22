@@ -21,6 +21,8 @@
 #include <unistd.h>
 
 std::atomic<uint64_t> g_events{0};
+
+static std::string hex(uint64_t v) { char x[20]; snprintf(x, sizeof x, "0x%llx", (unsigned long long)v); return x; }
 static int _unplaced = 0;   // events of an unknown fsid in a row
 
 static int  _fan = -1;
@@ -77,28 +79,14 @@ static constexpr uint64_t WATCHABLE = FAN_ACCESS | FAN_MODIFY | FAN_ATTRIB | FAN
 // Every mount point at or below a branch root, from mountinfo (no disk I/O).
 static std::vector<Mark> wanted_marks() {
     std::vector<Mark> out;
-    std::ifstream f("/proc/self/mountinfo");
-    std::string line;
-    while (std::getline(f, line)) {
-        std::istringstream ss(line);
-        std::string id, parent, devno, root, mp, tok, fstype;
-        ss >> id >> parent >> devno >> root >> mp;
-        while (ss >> tok && tok != "-") {}
-        ss >> fstype;
-        // mountinfo escapes blanks as \040
-        std::string p;
-        for (size_t i = 0; i < mp.size(); i++) {
-            if (mp[i] == '\\' && i + 3 < mp.size()) { p += (char)strtol(mp.substr(i + 1, 3).c_str(), nullptr, 8); i += 3; }
-            else p += mp[i];
-        }
+    for (auto& mi : mountinfo()) {
         std::string rel;
-        int b = branch_of_path(p, rel);
-        if (b >= 0) {
-            Mark m{b, p, fstype};
-            struct stat st;
-            if (stat(p.c_str(), &st) == 0) m.dev = st.st_dev;
-            out.push_back(m);
-        }
+        int b = branch_of_path(mi.mountpoint, rel);
+        if (b < 0) continue;
+        Mark m{b, mi.mountpoint, mi.fstype};
+        struct stat st;
+        if (stat(mi.mountpoint.c_str(), &st) == 0) m.dev = st.st_dev;
+        out.push_back(m);
     }
     return out;
 }
@@ -371,19 +359,18 @@ static void handle(const struct fanotify_event_metadata* ev, std::map<std::strin
     std::string rel;
     int b = branch_of_path(abs, rel);
     if (b < 0) { close(dfd); return; }
-    auto slash = rel.rfind('/');
-    std::string parent = slash == std::string::npos ? "" : rel.substr(0, slash);
+    std::string parent = path_dir(rel), base = path_base(rel);
     if (self) {
         // its entry lives in the parent: kept if the parent is (a share's own entry in the
         // root is, for every share - Unwake answers share names from RAM)
-        if (!rel.empty() && tree_cacheable(parent)) restat_later(b, parent, rel.substr(slash + 1));
+        if (!rel.empty() && tree_cacheable(parent)) restat_later(b, parent, base);
         close(dfd);
         return;
     }
     if (!tree_cacheable(rel)) {
         // a share passed on: its contents aren't kept, but a name coming or going in its
         // top folder changes that folder's mtime, and its entry in the root is kept
-        if (!rel.empty() && slash == std::string::npos &&
+        if (!rel.empty() && parent.empty() &&
             (ev->mask & (FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO)))
             restat_later(b, "", rel, false);
         close(dfd);
@@ -405,10 +392,9 @@ static void handle(const struct fanotify_event_metadata* ev, std::map<std::strin
     else if (ev->mask & (FAN_CLOSE_NOWRITE | FAN_CLOSE_WRITE)) restat_later(b, rel, name, false);   // read: atime
     // a name came or went: the folder's own mtime and ctime changed, with no event of its own
     if ((ev->mask & (FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO)) && !rel.empty())
-        restat_later(b, parent, rel.substr(slash + 1), false);
+        restat_later(b, parent, base, false);
     close(dfd);
-    if (g_debug) log_debug("event " + std::string(abs) + "/" + name + " mask 0x" +
-                           [&] { char x[20]; snprintf(x, sizeof x, "%llx", (unsigned long long)ev->mask); return std::string(x); }());
+    if (g_debug) log_debug("event " + std::string(abs) + "/" + name + " mask " + hex(ev->mask));
 }
 
 static void loop() {
@@ -488,8 +474,6 @@ static std::set<uint64_t> mark_masks() {
     }
     return out;
 }
-
-static std::string hex(uint64_t v) { char x[20]; snprintf(x, sizeof x, "0x%llx", (unsigned long long)v); return x; }
 
 // After an in-place upgrade: the marks came over as the version that set them made them,
 // with the events that one watched (a version from before reads were followed watched no

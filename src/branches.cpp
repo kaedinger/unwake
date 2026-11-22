@@ -21,41 +21,8 @@
 std::vector<std::unique_ptr<Branch>> g_branches;
 static bool _spin_known = false;   // the first poll only records the state
 
-static std::unordered_map<std::string, std::unordered_map<std::string, std::string>> read_ini(const std::string& file) {
-    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> out;
-    std::ifstream f(file);
-    std::string line, sec;
-    while (std::getline(f, line)) {
-        line = trim(line);
-        if (line.size() >= 2 && line.front() == '[') {
-            sec = line.substr(1, line.size() - 2);
-            if (sec.size() >= 2 && sec.front() == '"') sec = sec.substr(1, sec.size() - 2);
-            continue;
-        }
-        auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        auto v = line.substr(eq + 1);
-        if (v.size() >= 2 && v.front() == '"' && v.back() == '"') v = v.substr(1, v.size() - 2);
-        out[sec][line.substr(0, eq)] = v;
-    }
-    return out;
-}
-
-static std::vector<std::string> mount_points() {
-    std::vector<std::string> out;
-    std::ifstream f("/proc/self/mountinfo");
-    std::string line;
-    while (std::getline(f, line)) {
-        std::istringstream ss(line);
-        std::string id, parent, devno, root, mp;
-        ss >> id >> parent >> devno >> root >> mp;
-        out.push_back(mp);
-    }
-    return out;
-}
-
-static bool is_mounted(const std::vector<std::string>& mps, const std::string& p) {
-    for (auto& m : mps) if (m == p) return true;
+static bool is_mounted(const std::vector<MountInfo>& mounts, const std::string& p) {
+    for (auto& m : mounts) if (m.mountpoint == p) return true;
     return false;
 }
 
@@ -76,7 +43,7 @@ bool branches_load() {
         }
     } else {
         auto ini = read_ini(g_cfg.disks_ini);
-        auto mps = mount_points();
+        auto mounts = mountinfo();
         std::vector<std::unique_ptr<Branch>> pools, disks;
         // pools: "cache", "cache2", ...: extra members carry no mount point
         std::map<std::string, Branch*> by_name;
@@ -89,7 +56,7 @@ bool branches_load() {
             auto type = kv["type"];
             if (type != "Data" && type != "Cache") continue;
             auto mp = kv["fsMountpoint"];
-            if (mp.empty() || !is_mounted(mps, mp)) continue;
+            if (mp.empty() || !is_mounted(mounts, mp)) continue;
             auto b = std::make_unique<Branch>();
             b->name = kv["name"];
             b->root = mp;
@@ -144,13 +111,13 @@ static void spin_changed(Branch& b, bool up) {
     size_t total = 0, holding = 0;
     auto reqs = shfs_for(idx, 12, total, holding);
     if (reqs.empty()) {
-        log_info(b.name + " spun up - Unwake passed nothing to shfs or to " + b.name + " in the 30 s before (writes: 2 min)");
+        log_info(b.name + " spun up - Unwake passed nothing to shfs or to " + b.name + " " + shfs_window());
         return;
     }
     // shfs looks every path up on every disk: each request may have reached this one
     std::string list;
     for (auto& r : reqs) list += "\n    " + r;
-    log_info(b.name + " spun up - Unwake passed " + std::to_string(total) + " request(s) in the 30 s before (writes: 2 min), " +
+    log_info(b.name + " spun up - Unwake passed " + std::to_string(total) + " request(s) " + shfs_window() + ", " +
              std::to_string(holding) + " for folders on " + b.name + "; shfs looks each one up on every disk" +
              (total > reqs.size() ? ". The last " + std::to_string(reqs.size()) : std::string()) + ":" + list);
 }
@@ -471,8 +438,7 @@ static void walk(int b) {
 
 static void harvest_thread(int b) {
     // idle I/O class: the disk serves everyone else first
-    syscall(SYS_ioprio_set, 1 /* IOPRIO_WHO_PROCESS */, (int)syscall(SYS_gettid), (3 << 13) /* IDLE */);
-    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
+    background_priority();
     Branch& br = *g_branches[b];
     while (!_h_stop) {
         {

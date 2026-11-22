@@ -105,7 +105,10 @@ bool handover_send(int sock, struct fuse_session* se, const HoMount& m);
 // new worker: take over. true: the session, node table, tree and change events are
 // in place and the old worker has let go; start serving.
 bool handover_receive(int sock, struct fuse_session* se, HoMount& m, const std::string& test_mode);
+// worker exit codes the supervisor tells apart
+constexpr int EXIT_NOT_STARTED = 1;       // nothing mounted (fresh start that failed)
 constexpr int EXIT_HANDED_OVER = 3;
+constexpr int EXIT_NOT_TAKEN_OVER = 4;    // new worker of an upgrade: the old one serves on
 int handover_bench(uint64_t names);   // --bench-handover N
 bool ctl_send_upgrade(int ctl, int sock);   // supervisor: ask the worker to hand over on sock
 int  ctl_poll_upgrade(int ctl);             // worker: the socket of an upgrade request, or -1

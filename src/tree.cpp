@@ -191,10 +191,9 @@ void tree_clear_branch(int b) { clear_branch_rec(&g_tree.root, bit(b)); }
 
 void tree_forget(const std::string& rel) {
     if (rel.empty()) { tree_clear_all(); return; }
-    auto slash = rel.rfind('/');
-    DirNode* d = tree_find(slash == std::string::npos ? "" : rel.substr(0, slash));
+    DirNode* d = tree_find(path_dir(rel));
     if (!d) return;
-    auto it = d->entries.find(slash == std::string::npos ? rel : rel.substr(slash + 1));
+    auto it = d->entries.find(path_base(rel));
     if (it == d->entries.end() || !it->second.dir) return;
     for (auto& kv : it->second.dir->entries) tree_count_add(kv.second, -1);
     g_tree.dirs--;

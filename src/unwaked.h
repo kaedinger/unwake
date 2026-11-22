@@ -78,9 +78,22 @@ bool load_config(std::vector<std::string>& warn);
 std::string trim(const std::string& s);
 std::vector<std::string> split(const std::string& s, char sep);
 std::string join_path(const std::string& dir, const std::string& name);   // "" + "a" = "a"
+std::string path_dir(const std::string& rel);    // "a/b/c" -> "a/b", "a" -> ""
+std::string path_base(const std::string& rel);   // "a/b/c" -> "c", "a" -> "a"
 std::string human_count(uint64_t n);
 std::string fmt_secs(long s);
+std::string fmt_time(time_t t, const char* fmt = "%Y-%m-%d %H:%M:%S");   // local time
 int64_t     now_ms();
+// KEY=value lines, values unquoted, by [section] ("" before the first); # comments
+using IniSection = std::unordered_map<std::string, std::string>;
+std::unordered_map<std::string, IniSection> read_ini(const std::string& file);
+// /proc/self/mountinfo, in its order (the last one at a path is on top)
+struct MountInfo { int id = -1; unsigned major = 0, minor = 0; std::string mountpoint, fstype, source; };
+std::vector<MountInfo> mountinfo();
+long proc_status(const std::string& file, const char* key);   // "Tgid:" etc. of /proc/<pid>/status, 0 if absent
+// Cut a log file down to its newest keep bytes (whole lines), marker first; false: left as it was
+bool cut_to_tail(const std::string& file, off_t keep, const std::string& marker = "");
+void background_priority();   // this thread: idle I/O class, nice 10 (reading disks behind everything else)
 
 // ---------------------------------------------------------------------------
 // Union directory tree (tree.cpp)
@@ -247,3 +260,4 @@ void note_shfs(const char* op, const std::string& rel, const std::string& to = {
 std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& holding);
 // the last requests passed to shfs for names in dir (of the last 512 requests, any age)
 std::vector<std::string> shfs_recent(const std::string& dir, size_t max);
+std::string shfs_window();   // the time shfs_for covers, for a log line: "in the 30s before (writes: 2m)"
