@@ -30,6 +30,7 @@
 #include <fcntl.h>
 #include <exception>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <sys/mount.h>
 #include <sys/socket.h>
@@ -590,6 +591,35 @@ static int supervisor(pid_t adopt_child) {
     }
 }
 
+// unwaked --page-info: what the settings page shows and checks, from the code that uses it.
+// JSON: ok; warnings; settings (each one as in use: saved over the defaults, invalid ones
+// replaced, the trim size fitted); pool_only (shares passed to shfs by their settings);
+// limits (numbers the page's help texts name). No log, no files written.
+static int page_info() {
+    std::vector<std::string> warn;
+    bool ok = load_config(warn);
+    std::ostringstream o;
+    o << "{" << jstr("ok") << ":" << (ok ? "true" : "false") << "," << jstr("warnings") << ":[";
+    for (size_t i = 0; i < warn.size(); i++) o << (i ? "," : "") << jstr(warn[i]);
+    o << "]";
+    if (ok) {
+        std::map<std::string, std::string> sorted(g_cfg.in_effect.begin(), g_cfg.in_effect.end());
+        o << "," << jstr("settings") << ":{";
+        bool first = true;
+        for (auto& kv : sorted) { o << (first ? "" : ",") << jstr(kv.first) << ":" << jstr(kv.second); first = false; }
+        o << "}," << jstr("pool_only") << ":[";
+        branches_load();
+        auto pools = pool_only_shares();
+        for (size_t i = 0; i < pools.size(); i++) o << (i ? "," : "") << jstr(pools[i]);
+        o << "]," << jstr("limits") << ":{" << jstr("trim_after_names") << ":" << TRIM_AFTER_NAMES << ","
+          << jstr("trim_every_s") << ":" << TRIM_EVERY_MS / 1000 << "," << jstr("verify_confirm_s") << ":"
+          << VERIFY_CONFIRM_MS / 1000 << "}";
+    }
+    o << "}\n";
+    fputs(o.str().c_str(), stdout);
+    return ok ? 0 : 1;
+}
+
 static void usage() {
     const Config d;   // the built-in paths
     fprintf(stderr,
@@ -607,6 +637,7 @@ static void usage() {
         "  --branch NAME=PATH[,ssd]   use these branches instead of disks.ini (tests)\n"
         "  --no-supervisor     run the worker only\n"
         "  --handover-formats  print the state formats this version can take over from\n"
+        "  --page-info         print the settings in effect and what the settings page needs (JSON)\n"
         "In-place upgrade (internal): --adopt-fd FD, --ctl-fd FD, --supervise PID\n",
         _version.c_str(), d.mountpoint.c_str(), d.cfg_file.c_str(), d.defaults_file.c_str(), d.log_file.c_str(),
         d.verify_log.c_str(), d.run_dir.c_str(), d.disks_ini.c_str(), d.var_ini.c_str(), d.shares_dir.c_str());
@@ -623,7 +654,7 @@ static std::string self_exe() {
 }
 
 int main(int argc, char** argv) {
-    bool supervise = true;
+    bool supervise = true, info = false;
     pid_t supervise_child = 0;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -646,8 +677,10 @@ int main(int argc, char** argv) {
         else if (a == "--version") { printf("%s\n", _version.c_str()); return 0; }
         else if (a == "--handover-formats") { printf("%u %u\n", HANDOVER_FORMAT_MIN, HANDOVER_FORMAT); return 0; }
         else if (a == "--bench-handover") return handover_bench(std::stoull(val()));
+        else if (a == "--page-info") info = true;
         else { usage(); return 64; }
     }
+    if (info) return page_info();
     // descriptors inherited from whoever started us (a file on an old Unwake mount
     // would keep that one alive for as long as we run) - except the upgrade sockets
     {

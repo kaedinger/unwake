@@ -33,14 +33,12 @@ $msg    = '';
 
 switch ($action) {
 case 'save':
-    $defs = load_cfg(UNWAKE_DEFAULTS);
+    // what the page sends, over what was saved (keys it doesn't show, VERIFY_*, stay);
+    // unwaked checks it and says what each setting becomes
     $prev = load_cfg(UNWAKE_CFG);
-    $p    = fn($k)        => $prev[$k] ?? $defs[$k] ?? '';
-    $choice = fn($k) => array_key_exists($_POST[$k] ?? '', CHOICES[$k]) ? $_POST[$k] : $p($k);
-    $pint = fn($k, $m = 1) => isset($_POST[$k]) && ($v = intval($_POST[$k])) >= $m ? $v : intval($p($k));
-
-    $new = [];
-    foreach (array_keys(CHOICES) as $k) $new[$k] = $choice($k);
+    $new = $prev;
+    foreach ([...array_keys(CHOICES), ...NUMBERS] as $k)
+        if (isset($_POST[$k])) $new[$k] = trim((string)$_POST[$k]);
     // SSD-pool-only shares are decided by unwaked (no checkbox); entries made for them
     // by hand in unwake.cfg are kept. Other shares: unticked = excluded.
     $excluded = $included = [];
@@ -53,25 +51,33 @@ case 'save':
         if (($_POST['SHARE_CACHE_' . $name] ?? '1') === '0') $excluded[] = $name;
     }
     sort($excluded); sort($included);
-    $new['EXCLUDED_SHARES']  = implode(',', $excluded);
-    $new['INCLUDED_SHARES']  = implode(',', $included);
-    $new['LOG_MAX_SIZE_MB']  = $pint('LOG_MAX_SIZE_MB');
-    $new['LOG_TRIM_SIZE_MB'] = $pint('LOG_TRIM_SIZE_MB');
-    if ($new['LOG_TRIM_SIZE_MB'] >= $new['LOG_MAX_SIZE_MB']) $new['LOG_TRIM_SIZE_MB'] = max(1, intdiv($new['LOG_MAX_SIZE_MB'], 2));
-    $new += $prev;   // keys the page doesn't show (VERIFY_*, ...) are kept as they are
+    $new['EXCLUDED_SHARES'] = implode(',', $excluded);
+    $new['INCLUDED_SHARES'] = implode(',', $included);
+    $tmp = tempnam(sys_get_temp_dir(), 'unwake-cfg');
+    save_cfg($tmp, $new);
+    $pi = page_info($tmp);
+    @unlink($tmp);
+    if (empty($pi['ok'])) {
+        $why = $pi ? implode('; ', $pi['warnings']) : 'unwaked could not check them';
+        echo json_encode(['ok' => false, 'message' => "Settings not saved: $why", 'cfg' => $cfg] + poll_result($cfg));
+        break;
+    }
+    foreach ($new as $k => $v) if (isset($pi['settings'][$k])) $new[$k] = $pi['settings'][$k];
     save_cfg(UNWAKE_CFG, $new);
+    $warn = $pi['warnings'] ? ' (' . implode('; ', $pi['warnings']) . ')' : '';
 
     $st = daemon_status();
-    if ($new['SERVICE'] === 'enabled' && !$st['running']) {
+    if ($pi['settings']['SERVICE'] === 'enabled' && !$st['running']) {
         if (user_mount_type() === '') $msg = 'Settings saved. Unwake starts with the array.';
         else { [$ok, $out] = rc('start'); $msg = $ok ? 'Settings saved, Unwake started.' : "Settings saved, but: $out"; }
-    } elseif ($new['SERVICE'] === 'disabled' && $st['running']) {
+    } elseif ($pi['settings']['SERVICE'] === 'disabled' && $st['running']) {
         [$ok, $out] = rc('stop');
         $msg = "Settings saved. $out";
     } elseif ($st['running']) {
         rc('reload');
         $msg = 'Settings saved and applied.';
     } else $msg = 'Settings saved.';
+    $msg .= $warn;
     $cfg = settings();
     echo json_encode(['ok' => $ok, 'message' => $msg, 'cfg' => $cfg] + poll_result($cfg));
     break;

@@ -27,7 +27,6 @@
 #include <thread>
 #include <unistd.h>
 
-static constexpr int64_t CONFIRM_MS = 5000;           // second look after a difference
 static constexpr int64_t RETRY_MS = 60000;            // a folder that couldn't be checked or repaired: again then
 static constexpr int64_t IDLE_MS = 60000;             // a disk nobody else used for this long: let it spin down
 static constexpr off_t   LOG_MAX = 4 << 20, LOG_KEEP = 1 << 20;
@@ -287,7 +286,7 @@ static Outcome check(int b, const std::string& rel, std::vector<std::string>* su
     if (first.empty()) return NONE;
 
     // a second look: only what is still different, unchanged, and without a change in between
-    if (!pause_for(CONFIRM_MS) || !br.up) return UNSURE;
+    if (!pause_for(VERIFY_CONFIRM_MS) || !br.up) return UNSURE;
     uint64_t gen2 = 0;
     if (!snapshot(b, rel, ram, gen2, nullptr)) return UNSURE;
     disk.clear();

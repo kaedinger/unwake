@@ -8,6 +8,7 @@ const UNWAKE_DEFAULTS = '/usr/local/emhttp/plugins/unwake/unwake.cfg.default';
 const UNWAKE_LOG      = '/var/log/unwake.log';
 const UNWAKE_RUN      = '/var/run/unwake';
 const UNWAKE_RC       = '/etc/rc.d/rc.unwake';
+const UNWAKED         = '/usr/local/sbin/unwaked';
 const UNWAKE_PLG      = '/boot/config/plugins/unwake.plg';
 const UNWAKE_MNT      = '/mnt/user';
 const DISKS_INI       = '/var/local/emhttp/disks.ini';
@@ -35,12 +36,32 @@ function load_cfg($path) {
     return $cfg;
 }
 
-// The settings in effect: the saved ones over the defaults
-function settings() {
-    return [...load_cfg(UNWAKE_DEFAULTS), ...load_cfg(UNWAKE_CFG)];
+// What unwaked makes of a settings file (unwaked --page-info): ok, warnings, settings
+// (each as in use: the saved ones over the defaults, invalid ones replaced, the trim size
+// fitted), pool_only (shares it passes to shfs by their settings), limits (numbers the help
+// texts name). The rules live in unwaked only. null if it can't be asked.
+function page_info($cfg_file = UNWAKE_CFG) {
+    static $cache = [];   // per request, by the file's content (a save changes it)
+    $key = $cfg_file . ':' . @md5_file($cfg_file);
+    if (!isset($cache[$key])) {
+        $out = [];
+        exec(UNWAKED . ' --page-info --config ' . escapeshellarg($cfg_file) . ' 2>/dev/null', $out);
+        $cache[$key] = json_decode(implode("\n", $out), true);
+    }
+    return is_array($cache[$key]) ? $cache[$key] : null;
 }
 
-// The settings chosen from a list: value => label, in the page's order
+// The settings in effect. Without unwaked's answer: the saved ones over the defaults, unchecked
+function settings() {
+    $pi = page_info();
+    return !empty($pi['ok']) ? $pi['settings'] : [...load_cfg(UNWAKE_DEFAULTS), ...load_cfg(UNWAKE_CFG)];
+}
+
+// numbers the help texts name (from unwaked), 0 when not known
+function limit($name) { return page_info()['limits'][$name] ?? 0; }
+
+// The settings chosen from a list: the label of each value, in the page's order
+// (which values are valid is unwaked's to say; see page_info)
 const CHOICES = [
     'SERVICE'    => ['disabled' => 'No', 'enabled' => 'Yes'],
     'HARVEST'    => ['yes' => 'Yes', 'no' => 'No - only what is browsed'],
@@ -48,6 +69,8 @@ const CHOICES = [
     'RETURN_RAM' => ['no' => 'No', 'yes' => 'Yes'],
     'LOG_LEVEL'  => ['info' => 'Info', 'debug' => 'Debug (verbose - every change and cache miss)'],
 ];
+// The settings typed in as numbers
+const NUMBERS = ['LOG_MAX_SIZE_MB', 'LOG_TRIM_SIZE_MB'];
 
 function is_debug($cfg) { return ($cfg['LOG_LEVEL'] ?? '') === 'debug'; }
 
@@ -123,33 +146,18 @@ function installed() {
     return ['version' => $info['version'], 'channel' => $info['url'] === CHANNEL_URLS['beta'] ? 'beta' : 'stable'];
 }
 
-// Pools without spinning disks: name => true (from disks.ini)
-function ssd_pools() {
-    $rot = [];
-    foreach (@parse_ini_file(DISKS_INI, true) ?: [] as $d) {
-        if (($d['type'] ?? '') !== 'Cache' || !isset($d['name'])) continue;
-        $pool = rtrim($d['name'], '0123456789');
-        $rot[$pool] = ($rot[$pool] ?? false) || ($d['rotational'] ?? '1') !== '0';
-    }
-    return array_map(fn($r) => !$r, $rot);
-}
-
 // user shares from Unraid's share configs: name => [comment, pool_only]
-// pool_only: its files live on an SSD pool only (primary storage a pool, nothing or
-// the Mover towards the pool behind it) - it can't wake a disk, so Unwake leaves it
-// to shfs unless told otherwise. Same rule as the daemon's apply_exclusions().
+// pool_only: its settings keep it on an SSD pool only - it can't wake a disk, so Unwake
+// leaves it to shfs unless told otherwise (unwaked decides: page_info)
 function load_unraid_shares() {
     $out = [];
-    $ssd = ssd_pools();
+    $pool_only = page_info()['pool_only'] ?? [];
     $mounted = user_mount_type() !== '';
     foreach (glob(SHARES_DIR . '/*.cfg') ?: [] as $f) {
         $name = basename($f, '.cfg');
         if ($mounted && !is_dir(UNWAKE_MNT . "/$name")) continue;   // deleted share
         $c = load_cfg($f);
-        $use  = $c['shareUseCache'] ?? 'no';
-        $pool = ($c['shareCachePool'] ?? '') ?: 'cache';
-        $out[$name] = ['comment' => $c['shareComment'] ?? '',
-                       'pool_only' => in_array($use, ['only', 'prefer'], true) && !empty($ssd[$pool])];
+        $out[$name] = ['comment' => $c['shareComment'] ?? '', 'pool_only' => in_array($name, $pool_only, true)];
     }
     ksort($out, SORT_NATURAL | SORT_FLAG_CASE);
     return $out;
@@ -188,7 +196,7 @@ function fmt_count($n) {
 function fmt_dur($ms) {
     $s = (int)round($ms / 1000);
     if ($s >= 3600) return intdiv($s, 3600) . 'h' . ($s % 3600 >= 60 ? ' ' . intdiv($s % 3600, 60) . 'm' : '');
-    if ($s >= 60) return intdiv($s, 60) . 'm ' . ($s % 60) . 's';
+    if ($s >= 60) return intdiv($s, 60) . 'm' . ($s % 60 ? ' ' . ($s % 60) . 's' : '');
     return $s . 's';
 }
 

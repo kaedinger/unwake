@@ -71,6 +71,7 @@ struct Config {
     std::atomic<long> verify_interval{0};   // VERIFY_INTERVAL: seconds from the end of a pass to the next
     long        log_max_mb   = 1;           // LOG_MAX_SIZE_MB
     long        log_trim_mb  = 1;           // LOG_TRIM_SIZE_MB
+    std::unordered_map<std::string, std::string> in_effect;   // every setting as in use (unwaked --page-info)
 };
 extern Config g_cfg;
 // false: unwake.cfg.default missing or broken - nothing changed. warn: what to log
@@ -206,6 +207,7 @@ void  apply_exclusions();                // effective excluded shares from confi
 void  recompute_exclusions();            // SSD-pool-only shares: passed through unless an array disk holds them
 int pool_branch_of(const std::string& share);   // the pool a pool-only share is reached on directly, or -1
 std::string pool_only_json();            // {"share": {"known": 0|1, "on": ["disk2"]}}
+std::vector<std::string> pool_only_shares();   // by their share settings, sorted
 
 // ---------------------------------------------------------------------------
 // Verifier (verify.cpp): compares the tree with the disks, slowly, while they spin
@@ -213,6 +215,7 @@ std::string pool_only_json();            // {"share": {"known": 0|1, "on": ["dis
 void  verify_start();
 void  verify_stop();
 bool  verify_on();                       // VERIFY=yes, or a beta build
+constexpr int64_t VERIFY_CONFIRM_MS = 5000;   // a difference counts if a second look this much later shows it too
 std::string verify_json(int b);          // {"state":"waiting|running|done","checked","total","found","repaired","pending","done_at"}
 
 // ---------------------------------------------------------------------------

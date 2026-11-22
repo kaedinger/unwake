@@ -5,8 +5,8 @@
 # unwaked mounts itself on top of /mnt/user (shfs stays mounted underneath).
 # stop detaches it: new access goes to shfs at once, and the old unwaked keeps
 # serving what still uses it (open files, a VM, containers started while it ran)
-# until the last user is gone. stop --array (array stop) cuts those off after
-# 10 seconds, so Unraid can unmount shfs.
+# until the last user is gone. stop --array (array stop) cuts those off after a few
+# seconds (unwaked: ARRAY_STOP_CUT_MS), so Unraid can unmount shfs.
 
 DAEMON=${UNWAKE_DAEMON:-/usr/local/sbin/unwaked}
 RUN=${UNWAKE_RUN:-/var/run/unwake}

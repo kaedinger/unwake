@@ -212,6 +212,7 @@ struct Settings {
     const KV& defs;
     const std::string& defaults_file;
     std::vector<std::string>& warn;
+    KV effective = {};   // the value of each setting in effect, as it would be saved
     bool ok = true;
 
     template <class Parse>
@@ -229,28 +230,32 @@ struct Settings {
         warn.push_back(std::string(key) + "=\"" + s->second + "\" is not " + valid + " - using the default \"" + d->second + "\"");
         return *def;
     }
-    bool yesno(const char* key) {
-        return get(key, "yes or no", [](const std::string& v) {
-            return v == "yes" ? std::optional<bool>(true) : v == "no" ? std::optional<bool>(false) : std::nullopt;
-        });
-    }
+    bool yesno(const char* key) { return either(key, "yes", "no"); }
     // true for the first of the two values, false for the second
     bool either(const char* key, const char* first, const char* second) {
         std::string valid = std::string(first) + " or " + second;
-        return get(key, valid.c_str(), [&](const std::string& v) {
+        bool v = get(key, valid.c_str(), [&](const std::string& v) {
             return v == first ? std::optional<bool>(true) : v == second ? std::optional<bool>(false) : std::nullopt;
         });
+        effective[key] = v ? first : second;
+        return v;
     }
     long number(const char* key, long min) {
         std::string valid = "a number of at least " + std::to_string(min);
-        return get(key, valid.c_str(), [min](const std::string& v) {
+        long v = get(key, valid.c_str(), [min](const std::string& v) {
             char* end = nullptr;
             long n = strtol(v.c_str(), &end, 10);
             return !v.empty() && !*end && n >= min ? std::optional<long>(n) : std::nullopt;
         });
+        effective[key] = std::to_string(v);
+        return v;
     }
     std::vector<std::string> list(const char* key) {
-        return get(key, "", [](const std::string& v) { return std::optional<std::vector<std::string>>(split(v, ',')); });
+        auto v = get(key, "", [](const std::string& v) { return std::optional<std::vector<std::string>>(split(v, ',')); });
+        std::string joined;
+        for (auto& x : v) joined += (joined.empty() ? "" : ",") + x;
+        effective[key] = joined;
+        return v;
     }
 };
 }   // namespace
@@ -263,6 +268,7 @@ bool load_config(std::vector<std::string>& warn) {
     }
     KV saved = read_kv(g_cfg.cfg_file);
     Settings s{saved, defs, g_cfg.defaults_file, warn};
+    s.either("SERVICE", "enabled", "disabled");   // rc.unwake starts on it; checked here like the rest
     bool debug       = s.either("LOG_LEVEL", "debug", "info");
     bool harvest     = s.yesno("HARVEST");
     bool return_ram  = s.yesno("RETURN_RAM");
@@ -275,7 +281,10 @@ bool load_config(std::vector<std::string>& warn) {
     long log_max     = s.number("LOG_MAX_SIZE_MB", 1);
     long log_trim    = s.number("LOG_TRIM_SIZE_MB", 1);
     if (!s.ok) return false;
-    if (log_trim >= log_max) log_trim = std::max(1L, log_max / 2);   // as the settings page saves it
+    if (log_trim >= log_max) {   // the trim size must be smaller, or every new line cuts the log again
+        log_trim = std::max(1L, log_max / 2);
+        s.effective["LOG_TRIM_SIZE_MB"] = std::to_string(log_trim);
+    }
     g_cfg.debug = debug;
     g_cfg.harvest = harvest;
     g_cfg.return_ram = return_ram;
@@ -287,6 +296,7 @@ bool load_config(std::vector<std::string>& warn) {
     g_cfg.included_explicit = included;
     g_cfg.log_max_mb = log_max;
     g_cfg.log_trim_mb = log_trim;
+    g_cfg.in_effect = s.effective;
     g_debug = debug;
     return true;
 }

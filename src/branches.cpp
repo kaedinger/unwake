@@ -184,8 +184,11 @@ static std::vector<std::string> _pool_only;          // candidates, from the sha
 static std::mutex _pool_mu;
 static std::map<std::string, std::pair<bool, std::vector<std::string>>> _pool_state;   // share -> (all disks known, disks holding it)
 
-void apply_exclusions() {
-    _pool_only.clear();
+// Shares whose settings keep them on an SSD pool only (primary storage a pool, nothing or the
+// Mover towards the pool behind it): they can't wake a disk. Sorted. The settings page
+// asks for these too (unwaked --page-info).
+std::vector<std::string> pool_only_shares() {
+    std::vector<std::string> out;
     DIR* dp = opendir(g_cfg.shares_dir.c_str());
     while (dp) {
         auto de = readdir(dp);
@@ -193,15 +196,20 @@ void apply_exclusions() {
         std::string f = de->d_name;
         if (f.size() < 5 || f.compare(f.size() - 4, 4, ".cfg")) continue;
         auto share = f.substr(0, f.size() - 4);
-        auto ini = read_ini(g_cfg.shares_dir + "/" + f);
-        auto& kv = ini[""];
+        auto kv = read_ini(g_cfg.shares_dir + "/" + f)[""];
         auto use = kv["shareUseCache"], pool = kv["shareCachePool"];
         if (use != "only" && use != "prefer") continue;
-        if (pool.empty()) pool = "cache";
+        if (pool.empty()) pool = "cache";   // Unraid's default pool
         for (auto& b : g_branches)
-            if (b->name == pool && !b->rotational) _pool_only.push_back(share);
+            if (b->name == pool && !b->rotational) out.push_back(share);
     }
     if (dp) closedir(dp);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+void apply_exclusions() {
+    _pool_only = pool_only_shares();
     recompute_exclusions();
 }
 

@@ -371,6 +371,18 @@ check "an invalid saved value: reported, the default used" \
     grep -q 'LOG_LEVEL="loud" is not debug or info - using the default "info"' "$T/unwake.log"
 check "and the other settings still reloaded" test "$(grep -c 'Settings reloaded' "$T/unwake.log")" -gt "$n0"
 sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL="debug"/' "$T/unwake.cfg"; kill -HUP "$SUP"; sleep 1
+# the settings page asks unwaked what a settings file means (unwaked --page-info)
+printf 'LOG_LEVEL="loud"\nLOG_MAX_SIZE_MB="4"\nLOG_TRIM_SIZE_MB="8"\n' > "$T/page.cfg"
+pi=$("$BIN" --page-info --config "$T/page.cfg" --defaults "$DEFAULTS" --shares-dir "$T/shares" \
+           --branch "cache=$T/mnt/cache,ssd" --branch "disk1=$T/mnt/disk1" --branch "disk2=$T/mnt/disk2" --run-dir "$T/run2")
+pij() { python3 -c "import json,sys; d=json.loads(sys.argv[2]); print(eval(sys.argv[1]))" "$1" "$pi"; }
+echo "  page-info: $pi" | cut -c1-300
+check "page-info: an invalid value as the default, with the warning" test "$(pij "d['settings']['LOG_LEVEL']")" = info -a "$(pij "len(d['warnings'])")" = 1
+check "page-info: the trim size fitted below the max size" test "$(pij "d['settings']['LOG_TRIM_SIZE_MB']")" = 2
+check "page-info: a setting not saved has its default" test "$(pij "d['settings']['VERIFY_RATE']")" = "$(grep -o '^VERIFY_RATE="[0-9]*"' "$DEFAULTS" | grep -o '[0-9]*')"
+check "page-info: the SSD-pool-only shares, by their settings" test "$(pij "','.join(d['pool_only'])")" = "appdata,docs"
+check "page-info: the limits the help texts name" test "$(pij "sorted(d['limits'])")" = "['trim_after_names', 'trim_every_s', 'verify_confirm_s']"
+check "page-info writes no run files" test ! -e "$T/run2"
 mkdir -p "$T/run2"
 "$BIN" --no-supervisor --mountpoint "$T/mnt/user" --config "$T/unwake.cfg" --defaults "$T/no-such-file" \
        --log "$T/nodefaults.log" --run-dir "$T/run2" --shares-dir "$T/shares" --branch "disk1=$T/mnt/disk1"; rc=$?
