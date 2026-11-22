@@ -97,7 +97,24 @@ Measured on the author's server (1.4 million names): 376 MB before the nightly b
 plugin install https://github.com/kaedinger/unwake/releases/latest/download/unwake.plg
 ```
 
-Settings under *Settings → Utilities → Unwake*. Betas: switch channels at the bottom right of the settings page.
+Settings under *Settings → Utilities → Unwake*.
+
+### Stable and beta channel
+
+New features come out as betas first. The switch at the bottom right of the settings page shows the newest version on each channel and moves you between them:
+
+- **Switch:** move the slider to the other channel and click **Switch**. A note tells you what changes, then the version from that channel is installed. From then on, the Plugins page offers you updates from that channel only.
+- **Update:** when your own channel has a newer version, it's shown in red and the button turns into **Update**.
+- **Every stable release reaches the beta channel too**, either under the same number or inside the next beta. Beta users never miss a fix. When the beta is the stable release itself, its changelog says *Beta channel: identical to stable release ...*.
+- **Settings stay** when you switch. Going back to stable drops settings that only exist in the beta the next time you save; they come back with their defaults if you switch to beta again.
+- **Community Applications:** on the beta channel, CA doesn't list Unwake under *Installed Apps*, because CA only recognizes the stable version. Unwake keeps working and updating as usual; manage it on the Plugins page.
+- **Fix Common Problems** warns on the beta channel that Unwake is *not known to Community Applications*. Same reason: CA only knows the stable version. Nothing is wrong; you can ignore that warning.
+
+To install the beta directly:
+
+```bash
+plugin install https://raw.githubusercontent.com/kaedinger/unwake/channel/unwake.plg
+```
 
 Unwake replaces Dynamix Cache Directories - turn that off under *Settings → Folder Caching*. If it left `vfs_cache_pressure` at a low value, the settings page offers to set it back to 100.
 
