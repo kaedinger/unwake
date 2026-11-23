@@ -144,7 +144,7 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
 // Companion pill: Unspin's settings when it's installed, else (COMPANION_HINT) a hint
 // to install it. COMPANION_LABEL adds the name to the icon. Both only in unwake.cfg.
 $us_installed = is_file('/usr/local/emhttp/plugins/unspin/Unspin.page');
-$us_label     = ($c['COMPANION_LABEL'] ?? 'no') === 'yes';
+$us_label     = ($c['COMPANION_LABEL'] ?? 'yes') === 'yes';
 $us_hint      = ($c['COMPANION_HINT'] ?? 'yes') === 'yes';
 if ($us_installed || $us_hint):
 ?>

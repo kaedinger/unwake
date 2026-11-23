@@ -36,5 +36,5 @@ VERIFY_INTERVAL="86400"
 # Companion pill at the top right of the settings page (not on the page itself):
 # show the name next to Unspin's icon (yes/no), and, while Unspin isn't
 # installed, a hint that Unwake works best with it (yes/no).
-COMPANION_LABEL="no"
+COMPANION_LABEL="yes"
 COMPANION_HINT="yes"

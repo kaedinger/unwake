@@ -136,7 +136,7 @@ Unwake replaces Dynamix Cache Directories - turn that off under *Settings → Fo
 | `VERIFY` | `yes` | The verifier compares the folders in RAM with the disks and repairs what differs. `no` turns it off; a beta always verifies |
 | `VERIFY_RATE` | `50` | Folders per second and disk the verifier checks (at least `1`) |
 | `VERIFY_INTERVAL` | `86400` | Seconds from the end of a disk's pass to its next one (`0`: right away) |
-| `COMPANION_LABEL` | `no` | Not on the settings page. Show the name next to Unspin's icon in the pill at the top right of the settings page (`yes`), or the icon only (`no`) |
+| `COMPANION_LABEL` | `yes` | Not on the settings page. Show the name next to Unspin's icon in the pill at the top right of the settings page (`yes`), or the icon only (`no`) |
 | `COMPANION_HINT` | `yes` | Not on the settings page. While Unspin isn't installed, the pill says that Unwake works best with Unspin and links to it (`yes`); `no` hides the pill instead |
 
 The three `VERIFY` keys are not on the settings page (on the beta channel it shows the verifier's progress; on the stable channel, Unwake verifies without showing it); set them in `/boot/config/plugins/unwake/unwake.cfg`, then run `/etc/rc.d/rc.unwake reload`. The verifier needs `HARVEST=yes` and checks a disk only after its folders were read once, and only while it spins anyway and something else is using it, so it never keeps a disk awake. Every difference it finds goes to `/var/log/unwake-verify.log`.
