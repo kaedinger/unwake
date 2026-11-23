@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.23.35258-beta">
+  <!ENTITY version   "2026.11.23.41367-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,7 +20,7 @@
 >
 
 <CHANGES>
-### next
+### 2026.11.23.41367-beta
 - feat: quick link to Unspin when it's installed, else a hint to install it (COMPANION_LABEL, COMPANION_HINT in unwake.cfg)
 - ui: the "Version ... is running" line wraps within the settings column, with a small Restart button
 
