@@ -10,6 +10,7 @@ Unwake's brother is [Unspin](https://github.com/kaedinger/unspin), which has the
 
 <p align="center">
   <a href="https://github.com/kaedinger/unwake/releases/latest"><img src="https://img.shields.io/github/v/release/kaedinger/unwake?style=flat-square" alt="Latest Release"></a>
+  <a href="https://github.com/kaedinger/unwake/releases"><img src="https://img.shields.io/github/v/release/kaedinger/unwake?include_prereleases&sort=date&label=beta&color=orange&style=flat-square" alt="Latest Beta"></a>
   <a href="https://github.com/kaedinger/unwake/releases"><img src="https://img.shields.io/github/release-date/kaedinger/unwake?style=flat-square" alt="Release Date"></a>
   <a href="https://unraid.net/"><img src="https://img.shields.io/badge/Unraid-tested%20with%207.3.2-white?logo=unraid&logoColor=white&labelColor=orange" alt="Tested with Unraid 7.3.2"></a>
   <a href="https://github.com/kaedinger/unwake/issues"><img src="https://img.shields.io/github/issues/kaedinger/unwake?style=flat-square" alt="Open Issues"></a>
