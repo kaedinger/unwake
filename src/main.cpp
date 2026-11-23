@@ -420,6 +420,16 @@ static int worker() {
                 aborted = true;
             }
             if (!detached_at && every(2000)) { spin_poll(); if (g_caching) recompute_exclusions(); }
+            if (!detached_at && g_caching && every(30000)) {
+                // each disk's folder count in Disks and Pools, from RAM (not only after a read or verify pass)
+                std::vector<uint64_t> n(g_branches.size(), 0);
+                {
+                    std::shared_lock<std::shared_mutex> l(g_tree.mu);
+                    tree_count_dirs(n);
+                }
+                for (size_t i = 0; i < n.size(); i++)
+                    if (g_branches[i]->harvested && !g_branches[i]->harvesting) g_branches[i]->harvest_dirs = n[i];
+            }
             // a detached unwaked stays quiet: a new one may run already and own the status files
             if (!detached_at && every(2000)) write_status(state, started);
         }

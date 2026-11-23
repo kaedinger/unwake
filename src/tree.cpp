@@ -177,6 +177,21 @@ DirNode* tree_ensure(const std::string& rel, Mask present, uint32_t on) {
     return d;
 }
 
+// Folders per branch, from RAM: a folder counts for a branch whose slice of it is known
+// (the folders a verify pass checks). One walk for all branches.
+static void count_dirs(const DirNode* d, Mask m, std::vector<uint64_t>& n) {
+    m &= d->known;
+    if (!m) return;
+    for (Mask r = m; r; r &= r - 1) {
+        size_t b = (size_t)__builtin_ctzll(r);
+        if (b < n.size()) n[b]++;
+    }
+    for (auto& kv : d->entries)
+        if ((kv.second.mask & m) && kv.second.is_dir && kv.second.dir) count_dirs(kv.second.dir.get(), m & kv.second.mask, n);
+}
+
+void tree_count_dirs(std::vector<uint64_t>& n) { count_dirs(&g_tree.root, ~Mask(0), n); }
+
 // Is the slice of branch b of this directory known (present or known absent)?
 bool tree_known_on(const DirNode* d, Mask b) {
     if (d->known & b) return true;

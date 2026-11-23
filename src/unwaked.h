@@ -204,6 +204,7 @@ bool     tree_cacheable(const std::string& rel);                 // excluded sha
 void     tree_erase(DirNode* d, const std::string& name, uint32_t on = ALL_DISKS);   // lock held (exclusive)
 void     tree_count_add(const Entry& e, int sign);
 void     tree_clear_branch(int b);                                // lock held (exclusive)
+void     tree_count_dirs(std::vector<uint64_t>& n);               // lock held: folders known per branch
 void     tree_clear_all();                                        // lock held (exclusive)
 void     tree_forget(const std::string& rel);                     // lock held (exclusive): drop what's known below rel
 
