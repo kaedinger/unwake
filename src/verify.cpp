@@ -98,12 +98,13 @@ static std::string xattr_names(const Xattrs& x) {
 
 // the tree's view of rel on branch b; false: not a folder whose slice for b is known
 static bool snapshot(int b, const std::string& rel, std::map<std::string, InRam>& out, uint64_t& gen,
-                     std::vector<std::string>* subdirs) {
+                     std::vector<std::string>* subdirs, uint64_t* agen = nullptr) {
     Mask m = bit(b);
     std::shared_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(rel);
     if (!d || !(d->known & m)) return false;
     gen = d->gen;
+    if (agen) *agen = d->agen;
     out.clear();
     for (auto& kv : d->entries) {
         const Entry& e = kv.second;
@@ -163,12 +164,13 @@ static void clear_known(DirNode* d, Mask m) {
 }
 
 // what the disk says, into the tree; false if the folder changed meanwhile
-static bool repair(int b, const std::string& rel, uint64_t gen, const std::vector<Diff>& diffs,
+static bool repair(int b, const std::string& rel, uint64_t gen, uint64_t agen, const std::vector<Diff>& diffs,
                    const std::vector<Item>& disk) {
     Mask m = bit(b);
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(rel);
-    if (!d || d->gen != gen || !(d->known & m)) return false;
+    if (!d || (d->dirty & dbit(b)) || !(d->known & m)) return false;   // this disk changed here meanwhile
+    if (!g_branches[b]->harvested || g_branches[b]->harvesting) return false;   // its folders are being read again
     std::map<std::string, const Item*> items;
     for (auto& it : disk) items[it.name] = &it;
     for (auto& df : diffs) {
@@ -176,7 +178,7 @@ static bool repair(int b, const std::string& rel, uint64_t gen, const std::vecto
             auto it = d->entries.find(df.name);
             if (it == d->entries.end()) continue;
             it->second.mask &= ~m;
-            if (!it->second.mask) tree_erase(d, df.name);
+            if (!it->second.mask) tree_erase(d, df.name, dbit(b));
             else if (it->second.dir) clear_known(it->second.dir.get(), m);
             continue;
         }
@@ -197,7 +199,7 @@ static bool repair(int b, const std::string& rel, uint64_t gen, const std::vecto
             e.xattrs = item.xattrs;
         }
     }
-    d->gen++;
+    touch(d, dbit(b));
     return true;
 }
 
@@ -288,8 +290,12 @@ static Outcome check(int b, const std::string& rel, std::vector<std::string>* su
 
     // a second look: only what is still different, unchanged, and without a change in between
     if (!pause_for(VERIFY_CONFIRM_MS) || !br.up) return UNSURE;
-    uint64_t gen2 = 0;
-    if (!snapshot(b, rel, ram, gen2, nullptr)) return UNSURE;
+    {
+        std::unique_lock<std::shared_mutex> l(g_tree.mu);   // a change on this disk from now on: not now
+        if (DirNode* d = tree_find(rel)) d->dirty &= ~dbit(b);
+    }
+    uint64_t gen2 = 0, agen2 = 0;
+    if (!snapshot(b, rel, ram, gen2, nullptr, &agen2)) return UNSURE;
     disk.clear();
     if (!read_slice(abs, disk)) return UNSURE;
     auto second = compare(ram, disk);
@@ -299,7 +305,7 @@ static Outcome check(int b, const std::string& rel, std::vector<std::string>* su
     for (auto& d : second) if (was.count({d.name, d.what})) sure.push_back(d);
     if (sure.empty()) return UNSURE;
     n = sure.size();
-    bool ok = repair(b, rel, gen2, sure, disk);
+    bool ok = repair(b, rel, gen2, agen2, sure, disk);
     std::string where = br.name + " " + (rel.empty() ? "/" : rel);
     std::string text;
     for (auto& d : sure) text += "\n    \"" + d.name + "\": " + d.what;

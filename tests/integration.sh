@@ -226,7 +226,7 @@ check "symlink" bash -c "ln -s inband.txt '$U/shows/sl' && test -L '$U/shows/sl'
 check "hardlink" bash -c "ln '$U/shows/b' '$U/shows/hl' && stat -c '%h %i %n' '$U/shows/b' '$U/shows/hl' '$T/ref/media/shows/b' && test \$(cat '$U/shows/hl') = a && test \$(stat -c %h '$U/shows/b') = 2"
 # git's lock files: write a lot, close, rename at once - FUSE's RELEASE comes after the rename
 # (test-slow-release holds each release 300 ms, so the rename always gets in between)
-touch "$T/run/test-slow-release"
+echo 300 > "$T/run/test-slow-release"
 python3 - "$U/shows" <<'PY'
 import os, sys
 for i in range(20):
@@ -242,6 +242,45 @@ check "renamed files all there" test "$(ls "$U/shows" | grep -c '^lk[0-9]*$')" -
 rm -f "$U"/shows/lk*
 sleep 2
 check "listing equals shfs after in-band changes" same_listing
+
+say "races: what a request saw doesn't overwrite a newer change"
+# a folder of their own on disk1. Folders are moved in from a staging folder: the tree
+# then has their name but not their contents, so a lookup inside asks shfs
+R=media/movies/races; S="$T/mnt/disk1/stage"
+mkdir -p "$T/mnt/disk1/$R" "$S"; sleep 1.5
+ls "$T/mnt/user/$R" >/dev/null     # listed once: from now on its listing comes from RAM
+stage() { mkdir -p "$S/$1/$(dirname "$2")"; echo a > "$S/$1/$2"; mv "$S/$1" "$T/mnt/disk1/$R/$1"; sleep 1.5; }
+# 1: a name deleted while a lookup in a folder the tree doesn't have yet asks shfs
+stage rc1 f
+echo 2000 > "$T/run/test-slow-lookup"
+stat "$T/mnt/user/$R/rc1/f" >/dev/null 2>&1 & P=$!
+sleep 0.5; rm "$T/mnt/disk1/$R/rc1/f"; wait $P; rm -f "$T/run/test-slow-lookup"; sleep 1.5
+check "a name deleted during a lookup stays deleted" bash -c "! stat '$T/mnt/user/$R/rc1/f' >/dev/null 2>&1"
+# 2: a folder above renamed while a lookup below it asks shfs
+stage rc2 sub/f
+echo 2000 > "$T/run/test-slow-lookup"
+stat "$T/mnt/user/$R/rc2/sub/f" >/dev/null 2>&1 & P=$!
+sleep 0.5; mv "$T/mnt/disk1/$R/rc2" "$T/mnt/disk1/$R/rc2x"; wait $P; rm -f "$T/run/test-slow-lookup"; sleep 1.5
+# (the kernel lists with attributes after lookups, then without: a ghost shows in the second)
+check "no ghost folder after a rename above a lookup" bash -c "! { ls '$T/mnt/user/$R'; ls '$T/mnt/user/$R'; ls '$T/mnt/user/$R'; } | grep -qx rc2"
+check "the old path is gone" bash -c "! stat '$T/mnt/user/$R/rc2/sub/f' >/dev/null 2>&1"
+tree_names() { rm -f "$T/run/test-dump.out"; echo "$1" > "$T/run/test-dump"; for _ in $(seq 1 20); do [ -f "$T/run/test-dump.out" ] && break; sleep 0.2; done; cat "$T/run/test-dump.out"; }
+check "no ghost folder in RAM either" bash -c "! { $(declare -f tree_names); T='$T'; tree_names '$R'; } | grep -qx rc2"
+check "the renamed folder is there" test -e "$T/mnt/user/$R/rc2x/sub/f"
+# 3: a delete through Unwake while the same name comes back straight on the disk
+echo old > "$T/mnt/disk1/$R/rc3"; sleep 1.5
+echo 1500 > "$T/run/test-slow-unlink"
+rm "$T/mnt/user/$R/rc3" & P=$!
+sleep 0.4; echo new > "$T/mnt/disk1/$R/rc3"; wait $P; rm -f "$T/run/test-slow-unlink"; sleep 1.5
+check "a name back on the disk during a delete is there" test "$(cat "$T/mnt/user/$R/rc3" 2>&1)" = new
+# 4: a file grows on the disk while a lookup holds its old size
+stage rc4 f
+echo 2500 > "$T/run/test-slow-lookup"
+stat "$T/mnt/user/$R/rc4/f" >/dev/null 2>&1 & P=$!
+sleep 0.4; echo "more and more" >> "$T/mnt/disk1/$R/rc4/f"; wait $P; rm -f "$T/run/test-slow-lookup"; sleep 1.5
+check "the newer size wins over a lookup's older one" test "$(stat -c %s "$T/mnt/user/$R/rc4/f")" = "$(stat -c %s "$T/mnt/disk1/$R/rc4/f")"
+rm -rf "$T"/mnt/*/media/movies/races "$S"; sleep 1.5
+check "listing equals shfs after the races" same_listing
 
 say "xattrs come with the full read"
 kill "$SUP"; wait "$SUP" 2>/dev/null
@@ -399,6 +438,16 @@ mkdir -p "$T/run2"
        --log "$T/nodefaults.log" --run-dir "$T/run2" --shares-dir "$T/shares" --branch "disk1=$T/mnt/disk1"; rc=$?
 check "without unwake.cfg.default it doesn't start (exit $rc)" bash -c "[ $rc -ne 0 ] && grep -q 'no-such-file is missing or empty' '$T/nodefaults.log'"
 check "and the running one is untouched" same_listing
+
+say "harvest: changes on another disk don't disturb reading a folder"
+kill "$SUP"; wait "$SUP" 2>/dev/null
+echo "400 media/shows" > "$T/run/test-slow-harvest"
+( for i in $(seq 1 120); do echo x > "$T/mnt/cache/media/shows/churn-$((i % 5))"; rm -f "$T/mnt/cache/media/shows/churn-$(((i + 2) % 5))"; sleep 0.05; done ) & W=$!
+start_unwake && wait_harvest
+wait $W; rm -f "$T/run/test-slow-harvest" "$T"/mnt/cache/media/shows/churn-*; sleep 1.5
+k=$(tree_names media/shows | head -1); echo "  known: $k"
+check "a folder busy on the cache is still read on disk1 and disk2" bash -c "echo '$k' | grep -q 'disk1 disk2'"
+check "listing equals shfs after the busy folder" same_listing
 
 say "spun-down disk is never read"
 kill "$SUP"; wait "$SUP" 2>/dev/null

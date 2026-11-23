@@ -20,6 +20,11 @@
 >
 
 <CHANGES>
+### next
+- fix: a request that asked shfs no longer writes what it saw over a newer change from fanotify: no ghost names or folders, no missing names, no older sizes or times
+- fix: the folder reader gives up on a folder that keeps changing while read, instead of reading it again and again; changes on another disk or pool don't count
+- fix: a request whose path changed because a folder above was renamed is retried with the new path
+
 ### 2026.11.22.78844
 - ui: the Verify section shows on the beta channel, also while it offers the same version as stable
 - ui: the settings page links the support thread in the Unraid forum

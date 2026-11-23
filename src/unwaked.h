@@ -141,15 +141,45 @@ inline bool attr_from_branch_wins(const Entry& e, int b) {
     return e.mask && b == __builtin_ctzll(e.mask);
 }
 
+// Change counters. A reader that asks shfs or a disk and then writes what it learned
+// into the tree takes a PathSnap first and writes only if nothing changed meanwhile;
+// otherwise fanotify, which always re-checks the disk, has the last word. The counters
+// count changes on the disk, not changes of the tree: a removal of a name the tree
+// doesn't have bumps them too, and a change in a folder the tree doesn't have bumps
+// the global untraced counter. Values come from one sequence, so a folder that was
+// dropped and built again never shows an old value.
+uint64_t tree_seq();
+
 struct DirNode {
     DirNode*           parent = nullptr;
     const std::string* name   = nullptr;   // key of this dir in parent->entries
     std::unordered_map<std::string, Entry> entries;
     Mask     known       = 0;      // branches whose slice of this dir is fully known
     bool     pt_complete = false;  // union listing complete (from shfs), kept current since
-    uint64_t gen         = 0;      // bumped by every change, to detect races with readers
+    uint32_t dirty       = 0;      // disks with a change here since their reader cleared the bit
+                                   // (bit b % 32; it fills the padding after pt_complete: no extra RAM)
+    uint64_t gen         = tree_seq();     // names came, went or moved
+    uint64_t agen        = gen;            // an entry's attributes or xattrs changed
     Entry*   self_entry() const;   // this dir's entry in its parent (null for the root)
 };
+// on: the disks the change was on (a change through shfs: all, its disk isn't known).
+// The harvester and the verifier read one disk's slice and look only at its bit, so a
+// download on the cache doesn't disturb reading the same folder on disk3.
+inline uint32_t dbit(int b) { return uint32_t(1) << (b % 32); }   // a disk's dirty bit
+constexpr uint32_t ALL_DISKS = ~uint32_t(0);
+inline void touch(DirNode* d, uint32_t on = ALL_DISKS)      { d->gen = d->agen = tree_seq(); d->dirty |= on; }
+inline void touch_attr(DirNode* d, uint32_t on = ALL_DISKS) { d->agen = tree_seq(); d->dirty |= on; }
+extern uint64_t g_untraced;        // changes in folders not in the tree (tree lock held)
+
+// what a reader saw before asking shfs or a disk about names in dir
+struct PathSnap {
+    std::vector<uint64_t> gens;    // root .. the deepest folder of the path the tree has
+    uint64_t agen = 0;             // of dir itself, if the tree has it
+    size_t   want = 0;             // levels of the full path (root included)
+    uint64_t untraced = 0;
+};
+PathSnap tree_snap(const std::string& dir);                       // takes the lock
+bool     tree_snap_ok(const std::string& dir, const PathSnap& s, bool attrs);   // lock held
 
 struct Tree {
     std::shared_mutex mu;
@@ -162,7 +192,8 @@ extern Tree g_tree;
 
 std::vector<std::string> split_path(const std::string& rel);
 DirNode* tree_find(const std::string& rel);                      // lock held
-DirNode* tree_ensure(const std::string& rel, Mask present);      // lock held (exclusive)
+// on (here and in tree_erase): the disks the change is on, for DirNode::dirty
+DirNode* tree_ensure(const std::string& rel, Mask present, uint32_t on = ALL_DISKS);   // lock held (exclusive)
 // the xattrs of a path (no symlinks followed); null if unreadable or bigger than
 // what's worth keeping. "none" is one shared empty set, so it costs no memory.
 std::shared_ptr<const Xattrs> read_xattrs(const std::string& path, int* err = nullptr);
@@ -170,7 +201,7 @@ bool     tree_servable(const DirNode* d);                        // lock held
 bool     tree_all_known(const DirNode* d);                       // every branch slice known
 bool     tree_known_on(const DirNode* d, Mask b);                // branch b's slice known (present or absent)
 bool     tree_cacheable(const std::string& rel);                 // excluded shares
-void     tree_erase(DirNode* d, const std::string& name);        // lock held (exclusive)
+void     tree_erase(DirNode* d, const std::string& name, uint32_t on = ALL_DISKS);   // lock held (exclusive)
 void     tree_count_add(const Entry& e, int sign);
 void     tree_clear_branch(int b);                                // lock held (exclusive)
 void     tree_clear_all();                                        // lock held (exclusive)

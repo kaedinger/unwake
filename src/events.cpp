@@ -177,7 +177,7 @@ static void apply_added(int b, const std::string& rel_dir, const std::string& na
                         const struct stat& st, bool created, std::shared_ptr<const Xattrs> xs) {
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(rel_dir);
-    if (!d) return;
+    if (!d) { g_untraced++; return; }
     bool servable = tree_servable(d);
     auto r = d->entries.try_emplace(name);
     Entry& e = r.first->second;
@@ -206,7 +206,7 @@ static void apply_added(int b, const std::string& rel_dir, const std::string& na
         e.dir = std::move(nd);
         g_tree.dirs++;
     }
-    d->gen++;
+    touch(d, dbit(b));
 }
 
 // A folder was deleted from disk b but stays on others: nothing below it is on b any more
@@ -220,7 +220,7 @@ static void strip_branch(DirNode* d, int b, const std::string& rel) {
         std::string path = rel.empty() ? it->first : rel + "/" + it->first;
         bool source = e.has_attr && (e.attr_from >= 0 ? e.attr_from == b : b == __builtin_ctzll(e.mask));
         e.mask &= ~bit(b);
-        if (!e.mask) { auto name = it->first; ++it; tree_erase(d, name); continue; }
+        if (!e.mask) { auto name = it->first; ++it; tree_erase(d, name, dbit(b)); continue; }
         if (source) {
             e.has_attr = false;
             e.xattrs.reset();
@@ -230,21 +230,21 @@ static void strip_branch(DirNode* d, int b, const std::string& rel) {
         if (e.dir) strip_branch(e.dir.get(), b, path);
         ++it;
     }
-    d->gen++;
+    touch(d, dbit(b));
 }
 
 static void apply_removed(int b, const std::string& rel_dir, const std::string& name, bool moved) {
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(rel_dir);
-    if (!d) return;
+    if (!d) { g_untraced++; return; }
     auto it = d->entries.find(name);
-    if (it == d->entries.end()) return;
+    if (it == d->entries.end()) { touch(d, dbit(b)); return; }   // a reader may have seen it: it must not add it back
     Entry& e = it->second;
     bool source = e.has_attr && (e.attr_from >= 0 ? e.attr_from == b : e.mask && b == __builtin_ctzll(e.mask));
     e.mask &= ~bit(b);
     if (moved) drop_subtree(e);
     else if (e.mask && e.dir) strip_branch(e.dir.get(), b, rel_dir.empty() ? name : rel_dir + "/" + name);
-    d->gen++;
+    touch(d, dbit(b));
     if (e.mask) {                                     // still on another disk
         if (source) {
             // the copy we showed is gone (the Mover moved it): show the first remaining one -
@@ -257,7 +257,7 @@ static void apply_removed(int b, const std::string& rel_dir, const std::string& 
         return;
     }
     bool sure = tree_all_known(d);
-    tree_erase(d, name);
+    tree_erase(d, name, dbit(b));
     if (!sure) {                                      // maybe still elsewhere: ask shfs next time
         d->pt_complete = false;
         log_debug("not sure " + name + " is gone from every disk - " + (rel_dir.empty() ? "/" : rel_dir) + " is listed by shfs next time");
@@ -282,7 +282,8 @@ static void flush_pending() {
         if (p.xattrs) xs = read_xattrs(abs);
         std::unique_lock<std::shared_mutex> l(g_tree.mu);
         DirNode* d = tree_find(p.dir);
-        if (!d) continue;
+        if (!d) { g_untraced++; continue; }
+        touch_attr(d, dbit(p.b));                        // a reader's older stat must not land after this
         auto it = d->entries.find(p.name);
         if (it == d->entries.end()) continue;
         Entry& e = it->second;
@@ -291,7 +292,6 @@ static void flush_pending() {
         e.has_attr = true;
         e.attr_from = (int8_t)p.b;
         if (p.xattrs) e.xattrs = xs;
-        d->gen++;
     }
 }
 

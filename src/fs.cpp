@@ -448,21 +448,28 @@ static int cache_get(const std::string& rel, Attr& a) {
     return tree_servable(d) ? 0 : -1;
 }
 
-static uint64_t cache_gen(const std::string& dir) {
-    std::shared_lock<std::shared_mutex> l(g_tree.mu);
-    DirNode* d = tree_find(dir);
-    return d ? d->gen : UINT64_MAX;
+// Tests only: <run_dir>/test-slow-<what> holds milliseconds to wait at a point where a
+// change can race the request (only with --branch); nothing in other builds
+#if UNWAKE_TEST_HOOKS
+static void test_pause(const char* what) {
+    if (g_cfg.branch_args.empty()) return;
+    std::ifstream f(g_cfg.run_dir + "/test-slow-" + what);
+    int ms = 0;
+    if (f >> ms && ms > 0) usleep(ms * 1000);
 }
+#else
+static inline void test_pause(const char*) {}
+#endif
 
-// Record a stat learned from shfs. gen0: the directory's generation before
-// asking shfs; if it changed (a change raced with us) a new name isn't added.
-static void cache_put(const std::string& rel, const struct stat& st, uint64_t gen0) {
+// Record a stat learned from shfs: s was taken before asking. If anything changed along
+// the path meanwhile, nothing is written: fanotify brings the truth.
+static void cache_put(const std::string& rel, const struct stat& st, const PathSnap& s) {
     if (rel.empty() || !caching_for(rel)) return;
-    std::unique_lock<std::shared_mutex> l(g_tree.mu);
     auto dir = path_dir(rel);
+    std::unique_lock<std::shared_mutex> l(g_tree.mu);
+    if (!tree_snap_ok(dir, s, true)) return;
     DirNode* d = tree_find(dir);
     if (!d) d = tree_ensure(dir, 0);
-    else if (d->gen != gen0 && !d->entries.count(path_base(rel))) return;
     auto r = d->entries.try_emplace(path_base(rel));
     Entry& e = r.first->second;
     if (r.second) g_tree.entries++;
@@ -471,16 +478,16 @@ static void cache_put(const std::string& rel, const struct stat& st, uint64_t ge
     e.attr_from = -1;
     e.is_dir = S_ISDIR(st.st_mode);
     e.dtype = (uint8_t)IFTODT(st.st_mode);
-    d->gen++;
+    if (r.second) touch(d); else touch_attr(d);
 }
 
 // New attributes of a name the tree has (after a write, chmod, truncate, ...). Never adds
 // the name: a rename or unlink may have raced with the caller (FUSE sends RELEASE after
-// close() returned, so a program can rename the file before we see it), and adding the
-// old name back would leave a ghost that listings show and opens can't find.
-static void cache_update(const std::string& rel, const struct stat& st) {
+// close() returned, so a program can rename the file before we see it).
+static void cache_update(const std::string& rel, const struct stat& st, const PathSnap& s) {
     if (rel.empty() || !caching_for(rel)) return;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
+    if (!tree_snap_ok(path_dir(rel), s, true)) return;
     DirNode* d = tree_find(path_dir(rel));
     if (!d) return;
     auto it = d->entries.find(path_base(rel));
@@ -491,20 +498,22 @@ static void cache_update(const std::string& rel, const struct stat& st) {
     e.attr_from = -1;
     e.is_dir = S_ISDIR(st.st_mode);
     e.dtype = (uint8_t)IFTODT(st.st_mode);
-    d->gen++;
+    touch_attr(d);
 }
 
-// Our own change through shfs removed a name.
-static void cache_removed(const std::string& rel) {
+// Our own change through shfs removed a name (s: before the unlink). If the folder changed
+// meanwhile (the name back already, from somewhere else), fanotify sorts it out.
+static void cache_removed(const std::string& rel, const PathSnap& s) {
     if (rel.empty()) return;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(path_dir(rel));
-    if (!d) return;
+    if (!d) { g_untraced++; return; }
+    if (!tree_snap_ok(path_dir(rel), s, false)) { touch(d); return; }
     auto it = d->entries.find(path_base(rel));
-    if (it == d->entries.end()) return;
+    if (it == d->entries.end()) { touch(d); return; }
     if (__builtin_popcountll(it->second.mask) > 1) {
         d->pt_complete = false;              // shfs may have removed only one copy
-        d->gen++;
+        touch(d);
         return;
     }
     tree_erase(d, path_base(rel));
@@ -514,26 +523,35 @@ static void cache_xattrs_unknown(const std::string& rel) {
     if (rel.empty()) return;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d = tree_find(path_dir(rel));
-    if (!d) return;
+    if (!d) { g_untraced++; return; }
+    touch_attr(d);
     auto it = d->entries.find(path_base(rel));
     if (it != d->entries.end()) it->second.xattrs.reset();
 }
 
-static void cache_renamed(const std::string& from, const std::string& to, bool exchange) {
+// Our own rename through shfs (s1, s2: before it). If either folder changed meanwhile,
+// the tree is left to fanotify.
+static void cache_renamed(const std::string& from, const std::string& to, bool exchange,
+                          const PathSnap& s1, const PathSnap& s2) {
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
     DirNode* d1 = tree_find(path_dir(from));
     DirNode* d2 = tree_find(path_dir(to));
-    if (exchange) {
+    if (!d1 || !d2) g_untraced++;
+    bool ok = tree_snap_ok(path_dir(from), s1, false) && tree_snap_ok(path_dir(to), s2, false);
+    if (exchange || !ok) {
         for (auto& p : {std::make_pair(d1, path_base(from)), std::make_pair(d2, path_base(to))})
-            if (p.first) { tree_erase(p.first, p.second); p.first->pt_complete = false; }
+            if (p.first) {
+                touch(p.first);
+                if (exchange) { tree_erase(p.first, p.second); p.first->pt_complete = false; }
+            }
         return;
     }
     // fanotify may have applied this rename already (MOVED_FROM/TO read before we got
     // here): then the source is gone and the target is in place - leave it as it is
     auto nh = d1 ? d1->entries.extract(path_base(from)) : decltype(d1->entries.extract(""))();
-    if (d1) d1->gen++;
+    if (d1) touch(d1);
     if (nh.empty()) {
-        if (d2 && !d2->entries.count(path_base(to))) d2->pt_complete = false;   // a name we know nothing about
+        if (d2) { touch(d2); if (!d2->entries.count(path_base(to))) d2->pt_complete = false; }
         return;
     }
     if (d2) tree_erase(d2, path_base(to));
@@ -542,7 +560,7 @@ static void cache_renamed(const std::string& from, const std::string& to, bool e
     auto ins = d2->entries.insert(std::move(nh));
     Entry& e = ins.position->second;
     if (e.dir) { e.dir->parent = d2; e.dir->name = &ins.position->first; }
-    d2->gen++;
+    touch(d2);
 }
 
 // ---------------------------------------------------------------------------
@@ -604,13 +622,26 @@ static void op_lookup(fuse_req_t req, fuse_ino_t parent, const char* name) {
     auto v = via(rel);
     note_via("lookup", rel, v);
     if (caching_for(rel)) log_debug("lookup miss " + rel + by());   // shares not in RAM: no line per request
-    auto gen0 = cache_gen(prel);
+    auto snap = tree_snap(prel);
     struct stat st;
-    if (fstatat(v.fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) {
+    int r = fstatat(v.fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW);
+    if (r != 0 && errno == ENOENT) {
+        // a folder above was renamed meanwhile: the old path is gone, ask again by the new one
+        std::string p2;
+        if (path_of(parent, p2) && p2 != prel) {
+            prel = p2;
+            rel = join_path(prel, name);
+            v = via(rel);
+            snap = tree_snap(prel);
+            r = fstatat(v.fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW);
+        }
+    }
+    if (r != 0) {
         if (errno == ENOENT) return reply_negative(req);
         return (void)fuse_reply_err(req, errno);
     }
-    cache_put(rel, st, gen0);
+    test_pause("lookup");
+    cache_put(rel, st, snap);
     reply_entry(req, parent, name, st);
 }
 
@@ -679,9 +710,18 @@ static void op_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
         }
         auto v = via(rel);
         if (!rel.empty()) { g_stats.getattr_miss++; note_via("getattr", rel, v); }
-        auto gen0 = cache_gen(path_dir(rel));
-        if (fstatat(v.fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW) != 0) return (void)fuse_reply_err(req, errno);
-        cache_put(rel, st, gen0);
+        auto snap = tree_snap(path_dir(rel));
+        int r = fstatat(v.fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW);
+        std::string rel2;
+        if (r != 0 && errno == ENOENT && path_of(ino, rel2) && rel2 != rel) {   // a folder above was renamed
+            rel = rel2;
+            v = via(rel);
+            snap = tree_snap(path_dir(rel));
+            r = fstatat(v.fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW);
+        }
+        if (r != 0) return (void)fuse_reply_err(req, errno);
+        test_pause("getattr");
+        cache_put(rel, st, snap);
     }
     st.st_ino = ino;
     fuse_reply_attr(req, &st, ATTR_TIMEOUT);
@@ -692,6 +732,7 @@ static void op_setattr(fuse_req_t req, fuse_ino_t ino, struct stat* attr, int to
     int fd = fd_of(fi);
     if (!path_of(ino, rel) && fd < 0) return (void)fuse_reply_err(req, ENOENT);
     auto v = via(rel);
+    auto snap = tree_snap(path_dir(rel));
     int r = 0;
     if (to_set & FUSE_SET_ATTR_MODE)
         r = fd >= 0 ? fchmod(fd, attr->st_mode) : fchmodat(v.fd, rp(rel), attr->st_mode, 0);
@@ -717,7 +758,7 @@ static void op_setattr(fuse_req_t req, fuse_ino_t ino, struct stat* attr, int to
     struct stat st;
     if ((fd >= 0 ? fstat(fd, &st) : fstatat(v.fd, rp(rel), &st, AT_SYMLINK_NOFOLLOW)) != 0)
         return (void)fuse_reply_err(req, errno);
-    cache_update(rel, st);
+    cache_update(rel, st, snap);
     st.st_ino = ino;
     fuse_reply_attr(req, &st, ATTR_TIMEOUT);
 }
@@ -735,7 +776,8 @@ static void op_readlink(fuse_req_t req, fuse_ino_t ino) {
 }
 
 // after creating a name through shfs as root: give it to the caller, record it, reply
-static void created(fuse_req_t req, fuse_ino_t parent, const std::string& rel, const char* name, int fd) {
+static void created(fuse_req_t req, fuse_ino_t parent, const std::string& rel, const char* name, int fd,
+                    const PathSnap& snap) {
     auto ctx = fuse_req_ctx(req);
     int r = fd >= 0 ? fchown(fd, ctx->uid, ctx->gid)
                     : fchownat(g_shfs_fd, rel.c_str(), ctx->uid, ctx->gid, AT_SYMLINK_NOFOLLOW);
@@ -745,7 +787,8 @@ static void created(fuse_req_t req, fuse_ino_t parent, const std::string& rel, c
         fuse_reply_err(req, errno);
         return;
     }
-    cache_put(rel, st, cache_gen(path_dir(rel)));
+    test_pause("create");
+    cache_put(rel, st, snap);
     if (fd < 0) reply_entry(req, parent, name, st);
 }
 
@@ -754,8 +797,9 @@ static void op_mknod(fuse_req_t req, fuse_ino_t parent, const char* name, mode_t
     if (!path_of(parent, prel)) return (void)fuse_reply_err(req, ENOENT);
     auto rel = join_path(prel, name);
     note_shfs("mknod", rel);
+    auto snap = tree_snap(prel);
     if (mknodat(g_shfs_fd, rel.c_str(), mode, rdev) != 0) return (void)fuse_reply_err(req, errno);
-    created(req, parent, rel, name, -1);
+    created(req, parent, rel, name, -1, snap);
 }
 
 static void op_mkdir(fuse_req_t req, fuse_ino_t parent, const char* name, mode_t mode) {
@@ -763,8 +807,9 @@ static void op_mkdir(fuse_req_t req, fuse_ino_t parent, const char* name, mode_t
     if (!path_of(parent, prel)) return (void)fuse_reply_err(req, ENOENT);
     auto rel = join_path(prel, name);
     note_shfs("mkdir", rel);
+    auto snap = tree_snap(prel);
     if (mkdirat(g_shfs_fd, rel.c_str(), mode) != 0) return fail(req, "mkdir", rel, errno);
-    created(req, parent, rel, name, -1);
+    created(req, parent, rel, name, -1, snap);
 }
 
 static void op_symlink(fuse_req_t req, const char* link, fuse_ino_t parent, const char* name) {
@@ -772,8 +817,9 @@ static void op_symlink(fuse_req_t req, const char* link, fuse_ino_t parent, cons
     if (!path_of(parent, prel)) return (void)fuse_reply_err(req, ENOENT);
     auto rel = join_path(prel, name);
     note_shfs("symlink", rel);
+    auto snap = tree_snap(prel);
     if (symlinkat(link, g_shfs_fd, rel.c_str()) != 0) return (void)fuse_reply_err(req, errno);
-    created(req, parent, rel, name, -1);
+    created(req, parent, rel, name, -1, snap);
 }
 
 static void op_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const char* newname) {
@@ -781,11 +827,12 @@ static void op_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const 
     if (!path_of(ino, rel) || !path_of(newparent, prel)) return (void)fuse_reply_err(req, ENOENT);
     auto nrel = join_path(prel, newname);
     note_shfs("link", rel, nrel);
+    auto snap_new = tree_snap(prel), snap_old = tree_snap(path_dir(rel));
     if (linkat(g_shfs_fd, rel.c_str(), g_shfs_fd, nrel.c_str(), 0) != 0) return (void)fuse_reply_err(req, errno);
     struct stat st;
     if (fstatat(g_shfs_fd, nrel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) return (void)fuse_reply_err(req, errno);
-    cache_put(nrel, st, cache_gen(prel));
-    cache_update(rel, st);                           // nlink changed
+    cache_put(nrel, st, snap_new);
+    cache_update(rel, st, snap_old);                 // nlink changed
     // FUSE wants the existing inode back; the new name gets its own node on its next lookup
     {
         std::lock_guard<std::mutex> l(_nmu);
@@ -805,8 +852,10 @@ static void remove_name(fuse_req_t req, fuse_ino_t parent, const char* name, int
     if (!path_of(parent, prel)) return (void)fuse_reply_err(req, ENOENT);
     auto rel = join_path(prel, name);
     note_shfs(flags ? "rmdir" : "unlink", rel);
+    auto snap = tree_snap(prel);
     if (unlinkat(g_shfs_fd, rel.c_str(), flags) != 0) return fail(req, flags ? "rmdir" : "unlink", rel, errno);
-    cache_removed(rel);
+    test_pause("unlink");
+    cache_removed(rel, snap);
     node_unlinked(parent, name);
     fuse_reply_err(req, 0);
 }
@@ -819,6 +868,7 @@ static void op_rename(fuse_req_t req, fuse_ino_t parent, const char* name, fuse_
     if (!path_of(parent, a) || !path_of(newparent, b)) return (void)fuse_reply_err(req, ENOENT);
     auto from = join_path(a, name), to = join_path(b, newname);
     note_shfs("rename", from, to);
+    auto s1 = tree_snap(a), s2 = tree_snap(b);
     if (renameat2(g_shfs_fd, from.c_str(), g_shfs_fd, to.c_str(), flags) != 0) {
         int e = errno;
         // shfs rejects rename flags (RENAME_NOREPLACE etc.) with EINVAL, as it does without
@@ -829,7 +879,8 @@ static void op_rename(fuse_req_t req, fuse_ino_t parent, const char* name, fuse_
         }
         return fail(req, "rename", from + " -> " + to, e);
     }
-    cache_renamed(from, to, flags & RENAME_EXCHANGE);
+    test_pause("rename");
+    cache_renamed(from, to, flags & RENAME_EXCHANGE, s1, s2);
     node_renamed(parent, name, newparent, newname, flags & RENAME_EXCHANGE);
     fuse_reply_err(req, 0);
 }
@@ -904,10 +955,18 @@ static void op_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi) {
     if (fd < 0) {
         auto v = via(rel);     // an existing file: a pool-only share's pool can open it, also for writing
         note_via((flags & O_ACCMODE) == O_RDONLY && !(flags & O_TRUNC) ? "open" : "open (write)", rel, v);
+        auto snap = tree_snap(path_dir(rel));
         fd = openat(v.fd, rel.c_str(), flags);
+        std::string rel2;
+        if (fd < 0 && errno == ENOENT && path_of(ino, rel2) && rel2 != rel) {   // a folder above was renamed
+            rel = rel2;
+            v = via(rel);
+            snap = tree_snap(path_dir(rel));
+            fd = openat(v.fd, rel.c_str(), flags);
+        }
         if (fd < 0) {
             int e = errno;
-            if (e == ENOENT) cache_removed(rel);    // shfs has it nowhere: the tree was wrong
+            if (e == ENOENT) cache_removed(rel, snap);   // shfs has it nowhere: the tree was wrong
             return fail(req, "open", rel, e);
         }
         g_stats.open_shfs++;
@@ -920,13 +979,15 @@ static void op_create(fuse_req_t req, fuse_ino_t parent, const char* name, mode_
     if (!path_of(parent, prel)) return (void)fuse_reply_err(req, ENOENT);
     auto rel = join_path(prel, name);
     note_shfs("create", rel);
+    auto snap = tree_snap(prel);
     int fd = openat(g_shfs_fd, rel.c_str(), (fi->flags & ~O_NOCTTY) | O_CREAT | O_CLOEXEC, mode);
     if (fd < 0) return fail(req, "create", rel, errno);
     auto ctx = fuse_req_ctx(req);
     if (fchown(fd, ctx->uid, ctx->gid) != 0) log_warn("chown " + rel + ": " + strerror(errno));
     struct stat st;
     if (fstat(fd, &st) != 0) { int e = errno; close(fd); return (void)fuse_reply_err(req, e); }
-    cache_put(rel, st, cache_gen(prel));
+    test_pause("create");
+    cache_put(rel, st, snap);
     struct fuse_entry_param e = {};
     e.ino = node_ref(parent, name);
     e.attr = st;
@@ -967,13 +1028,12 @@ static void op_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
         int sfd = node_wfd(ino);   // the backing file if any: what was written is there
         std::string rel;
         struct stat st;
-        if (path_of(ino, rel) && fstat(sfd >= 0 ? sfd : h->fd, &st) == 0) {
-#if UNWAKE_TEST_HOOKS
-            // tests only: widen the window in which a rename overtakes this release
-            if (!g_cfg.branch_args.empty() && access((g_cfg.run_dir + "/test-slow-release").c_str(), F_OK) == 0)
-                usleep(300 * 1000);
-#endif
-            cache_update(rel, st);
+        if (path_of(ino, rel)) {
+            auto snap = tree_snap(path_dir(rel));
+            if (fstat(sfd >= 0 ? sfd : h->fd, &st) == 0) {
+                test_pause("release");     // tests: a rename overtakes this release
+                cache_update(rel, st, snap);
+            }
         }
         node_wfd_add(ino, h->fd, false);
     }
@@ -1021,7 +1081,7 @@ static void op_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
     dh->ents.push_back({"..", DT_DIR, {}, false});
     bool cache = caching_for(rel);
     bool hit = false;
-    uint64_t gen0 = 0;
+    PathSnap snap;
     if (cache) {
         {
             std::shared_lock<std::shared_mutex> l(g_tree.mu);
@@ -1033,10 +1093,7 @@ static void op_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
                     dh->ents.push_back({kv.first, kv.second.dtype, kv.second.attr, kv.second.has_attr});
             }
         }
-        if (!hit) {
-            std::unique_lock<std::shared_mutex> l(g_tree.mu);
-            gen0 = tree_ensure(rel, 0)->gen;
-        }
+        if (!hit) snap = tree_snap(rel);    // the folder is made in the tree only if the listing holds
     }
     if (hit) { g_stats.readdir_hit++; log_debug("readdir hit " + (rel.empty() ? "/" : rel) + by()); }
     else {
@@ -1057,10 +1114,11 @@ static void op_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
             dh->ents.push_back({de->d_name, de->d_type, {}, false});
         }
         closedir(dp);
+        test_pause("opendir");
         if (cache) {
             std::unique_lock<std::shared_mutex> l(g_tree.mu);
-            DirNode* d = tree_find(rel);
-            if (d && d->gen == gen0) {
+            DirNode* d = tree_snap_ok(rel, snap, false) ? tree_ensure(rel, 0) : nullptr;
+            if (d) {
                 std::unordered_map<std::string, const DEnt*> now;
                 for (size_t i = 2; i < dh->ents.size(); i++) now[dh->ents[i].name] = &dh->ents[i];
                 std::vector<std::string> gone;
@@ -1076,7 +1134,7 @@ static void op_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi
                     }
                 }
                 d->pt_complete = true;
-                d->gen++;
+                touch(d);
                 // what the tree knows already, for readdirplus
                 for (size_t i = 2; i < dh->ents.size(); i++) {
                     auto& e = d->entries[dh->ents[i].name];
@@ -1114,11 +1172,11 @@ static void do_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, s
                 auto rel = join_path(dh->rel, de.name);
                 if (!de.has_attr) {
                     struct stat st;
-                    auto gen0 = cache_gen(dh->rel);
+                    auto snap = tree_snap(dh->rel);
                     auto v = via(rel);
                     note_via("getattr", rel, v);
                     if (fstatat(v.fd, rel.c_str(), &st, AT_SYMLINK_NOFOLLOW) != 0) continue;   // gone
-                    cache_put(rel, st, gen0);
+                    cache_put(rel, st, snap);
                     de.attr.from(st);
                     de.has_attr = true;
                 }
@@ -1186,7 +1244,7 @@ static int xattrs_of(const std::string& rel, Xattrs& out) {
     g_stats.xattr_miss++;
     auto v = via(rel);
     note_via("xattr", rel, v);
-    auto gen0 = rel.empty() ? 0 : cache_gen(path_dir(rel));
+    auto snap = tree_snap(path_dir(rel));
     int err = 0;
     auto xs = read_xattrs(via_path(v, rel), &err);
     if (err) return err;
@@ -1208,10 +1266,11 @@ static int xattrs_of(const std::string& rel, Xattrs& out) {
     out = *xs;
     if (rel.empty() || !caching_for(rel)) return 0;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
+    if (!tree_snap_ok(path_dir(rel), snap, true)) return 0;
     DirNode* d = tree_find(path_dir(rel));
-    if (!d || d->gen != gen0) return 0;
+    if (!d) return 0;
     auto it = d->entries.find(path_base(rel));
-    if (it != d->entries.end()) it->second.xattrs = xs;
+    if (it != d->entries.end()) { it->second.xattrs = xs; touch_attr(d); }
     return 0;
 }
 

@@ -361,6 +361,7 @@ static void walk(int b) {
     int64_t t0 = now_ms();
     uint64_t ndirs = 0, nentries = 0, nread = 0;
     std::vector<std::string> stack{""};
+    std::unordered_map<std::string, int> tries;     // folders that changed while read
     br.harvesting = true;
     log_info("Harvest of " + br.name + " (" + br.root + ") started");
     while (!stack.empty()) {
@@ -374,14 +375,13 @@ static void walk(int b) {
         stack.pop_back();
         if (!tree_cacheable(rel)) continue;
 
-        uint64_t gen0;
         bool known;
         std::vector<std::string> subdirs;
         {
             std::unique_lock<std::shared_mutex> l(g_tree.mu);
-            DirNode* d = rel.empty() ? &g_tree.root : tree_ensure(rel, m);
+            DirNode* d = rel.empty() ? &g_tree.root : tree_ensure(rel, m, dbit(b));
             known = d->known & m;
-            gen0 = d->gen;
+            d->dirty &= ~dbit(b);   // a change on this disk from now on means: read again
             if (known) {
                 for (auto& kv : d->entries)
                     if ((kv.second.mask & m) && kv.second.is_dir) subdirs.push_back(join_path(rel, kv.first));
@@ -390,13 +390,26 @@ static void walk(int b) {
         if (!known) {
             std::vector<Item> items;
             if (!read_slice(br.root + (rel.empty() ? "" : "/" + rel), items)) continue;
+#if UNWAKE_TEST_HOOKS
+            if (!g_cfg.branch_args.empty()) {     // tests only: "<ms> <folder>" in test-slow-harvest
+                std::ifstream f(g_cfg.run_dir + "/test-slow-harvest");
+                int ms = 0;
+                std::string at;
+                if (f >> ms >> at && at == rel) usleep(ms * 1000);
+            }
+#endif
             nread++;
             std::unique_lock<std::shared_mutex> l(g_tree.mu);
             DirNode* d = rel.empty() ? &g_tree.root : tree_find(rel);
             if (!d) continue;                       // removed meanwhile
-            if (d->gen != gen0) {                   // changed while we read: read again
-                log_debug("harvest of " + br.name + ": " + (rel.empty() ? "/" : rel) + " changed while read, reading again");
-                stack.push_back(rel);
+            if (d->dirty & dbit(b)) {               // this disk changed here while we read: again, a few times
+                if (++tries[rel] <= 5) {
+                    log_debug("harvest of " + br.name + ": " + (rel.empty() ? "/" : rel) + " changed while read, reading again");
+                    stack.push_back(rel);
+                } else {
+                    // keeps changing: left to shfs (and fanotify) for now, not marked known
+                    log_debug("harvest of " + br.name + ": " + (rel.empty() ? "/" : rel) + " keeps changing, left out");
+                }
                 continue;
             }
             std::unordered_map<std::string, bool> seen;
@@ -420,11 +433,12 @@ static void walk(int b) {
                 Entry& e = d->entries[n];
                 e.mask &= ~m;
                 if (!e.mask) {                      // a change we never saw
-                    tree_erase(d, n);
+                    tree_erase(d, n, dbit(b));
                     d->pt_complete = false;
                 }
             }
-            d->known |= m;      // no gen bump: only events and our own changes race a reader
+            d->known |= m;
+            touch(d, dbit(b));  // readers that asked shfs before must not write over this
             for (auto& it : items)   // never into a mount we get no change events for
                 if (it.is_dir && events_dev_watched(it.dev)) subdirs.push_back(join_path(rel, it.name));
             nentries += items.size();
