@@ -187,9 +187,9 @@ if ($us_installed || $us_hint):
       <button type="button" id="uw-older-btn" onclick="uwUsers(this)" style="display:inline;margin:4px 0 0 6px;padding:2px 10px;min-width:0;"><?= htmlspecialchars($view['older_btn']) ?></button>
       <pre id="uw-users" class="uw-users" style="display:none;"></pre>
     </div>
-    <div id="uw-restart-row" style="margin-top:6px;<?= ($st['running'] && $view['version'] && $view['version'] !== $version) ? '' : 'display:none;' ?>">
+    <div id="uw-restart-row" style="margin-top:6px;width:var(--uw-col);max-width:100%;<?= ($st['running'] && $view['version'] && $view['version'] !== $version) ? '' : 'display:none;' ?>">
       <span class="uw-warn">Version <span id="uw-run-ver"><?= htmlspecialchars($view['version']) ?></span> is running, <?= htmlspecialchars($version) ?> is installed.</span>
-      <input type="button" value="Restart Unwake" onclick="uwRestart()">
+      <button type="button" onclick="uwRestart()" style="display:inline;margin:4px 0 0 6px;padding:2px 10px;min-width:0;">Restart Unwake</button>
     </div>
     <div class="uw-help">Unwake sits on top of the user share file system (shfs) on <code>/mnt/user</code> and answers folder listings, name lookups and attribute reads from RAM.
       <br><strong>Stop</strong> takes it off at once: new access goes straight to shfs. Files, containers or VMs that still use it keep working through it until they close or restart; then it exits.

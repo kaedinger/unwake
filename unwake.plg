@@ -22,6 +22,7 @@
 <CHANGES>
 ### next
 - feat: quick link to Unspin when it's installed, else a hint to install it (COMPANION_LABEL, COMPANION_HINT in unwake.cfg)
+- ui: the "Version ... is running" line wraps within the settings column, with a small Restart button
 
 ### 2026.11.23.35258-beta
 - fix: a request that asked shfs no longer writes what it saw over a newer change from fanotify: no ghost names or folders, no missing names, no older sizes or times
