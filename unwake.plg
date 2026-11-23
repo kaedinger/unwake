@@ -20,6 +20,9 @@
 >
 
 <CHANGES>
+### next
+- feat: quick link to Unspin when it's installed, else a hint to install it (COMPANION_LABEL, COMPANION_HINT in unwake.cfg)
+
 ### 2026.11.23.35258-beta
 - fix: a request that asked shfs no longer writes what it saw over a newer change from fanotify: no ghost names or folders, no missing names, no older sizes or times
 - fix: the folder reader gives up on a folder that keeps changing while read, instead of reading it again and again; changes on another disk or pool don't count

@@ -106,7 +106,73 @@ dt.uw-share-name { text-align: right; font-weight: normal; }
 .uw-reset { font-size: 1.35em; color: #f5a623; opacity: 0.8; cursor: pointer; line-height: 1; display: inline-flex; align-items: center; user-select: none; }
 .uw-reset:hover { opacity: 1; }
 .uw-users { margin: 6px 0 0; padding: 6px 8px; font-size: 0.85em; white-space: pre-wrap; background: var(--uw-code-bg, rgba(128,128,128,0.12)); border-radius: 4px; }
+
+/* Companion pill (Unspin): top right of this page, stays below Unraid's menu bar while scrolling */
+#uw-companion { position: relative; height: 0; }
+#uw-companion a {
+  position: fixed;
+  z-index: 100;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5em;
+  min-width: 2.4em;
+  height: 2.4em;
+  max-width: 60vw;
+  box-sizing: border-box;
+  padding: 0 .7em;
+  border-radius: 1.2em;
+  border: 1px solid rgba(128,128,128,0.45);
+  background: var(--background-color, #1c1b1b);
+  color: inherit;
+  font-size: 1.1em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.75;
+  text-decoration: none;
+  transition: opacity 0.2s;
+}
+#uw-companion a.uw-icon-only { padding: 0; }
+/* The name: lettering of Unraid's buttons, without their colors */
+#uw-companion a span { font-family: clear-sans; font-size: 1.1rem; font-weight: bold; letter-spacing: 1.8px; text-transform: uppercase; }
+#uw-companion a.uw-hint { font-size: .9em; height: 2.2em; }
+#uw-companion a:hover { opacity: 1; }
 </style>
+
+<?php
+// Companion pill: Unspin's settings when it's installed, else (COMPANION_HINT) a hint
+// to install it. COMPANION_LABEL adds the name to the icon. Both only in unwake.cfg.
+$us_installed = is_file('/usr/local/emhttp/plugins/unspin/Unspin.page');
+$us_label     = ($c['COMPANION_LABEL'] ?? 'no') === 'yes';
+$us_hint      = ($c['COMPANION_HINT'] ?? 'yes') === 'yes';
+if ($us_installed || $us_hint):
+?>
+<div id="uw-companion">
+<?php if ($us_installed): ?>
+  <a href="Unspin" title="Unspin: open its settings"<?= $us_label ? '' : ' class="uw-icon-only"' ?>><i class="fa fa-fire"></i><?= $us_label ? '<span>Unspin</span>' : '' ?></a>
+<?php else: ?>
+  <a class="uw-hint" href="https://github.com/kaedinger/unspin" target="_blank" rel="noopener" title="Unspin moves the files you use to the cache, so reading them doesn't spin up your disks">Unwake works best with <i class="fa fa-fire"></i> Unspin installed</a>
+<?php endif; ?>
+</div>
+<script>
+// Fixed to the window: starts at the top right of this page and, once scrolled, stays
+// below Unraid's menu bar where that sticks to the top (desktop, top-bar themes)
+(function () {
+  var box = document.getElementById('uw-companion'), pill = box.firstElementChild;
+  function place() {
+    var r = box.getBoundingClientRect(), m = document.getElementById('menu');
+    var below = (m && getComputedStyle(m).position === 'sticky') ? Math.max(0, m.getBoundingClientRect().bottom) : 0;
+    pill.style.top   = Math.max(r.top, below + 8) + 'px';
+    pill.style.right = Math.max(0, document.documentElement.clientWidth - r.right) + 'px';
+  }
+  place();
+  window.addEventListener('scroll', place, { capture: true, passive: true });
+  window.addEventListener('resize', place);
+  window.addEventListener('load', place);
+})();
+</script>
+<?php endif; ?>
 
 <div id="uw-message" style="min-height:1.4em;margin-bottom:4px;"></div>
 

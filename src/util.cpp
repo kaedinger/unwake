@@ -280,6 +280,8 @@ bool load_config(std::vector<std::string>& warn) {
     auto included    = s.list("INCLUDED_SHARES");
     long log_max     = s.number("LOG_MAX_SIZE_MB", 1);
     long log_trim    = s.number("LOG_TRIM_SIZE_MB", 1);
+    s.yesno("COMPANION_LABEL");   // the settings page's Unspin pill: checked here, used there
+    s.yesno("COMPANION_HINT");
     if (!s.ok) return false;
     if (log_trim >= log_max) {   // the trim size must be smaller, or every new line cuts the log again
         log_trim = std::max(1L, log_max / 2);
