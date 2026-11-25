@@ -33,6 +33,7 @@
 // Logging (util.cpp)
 // ---------------------------------------------------------------------------
 void log_open(const std::string& file);
+void log_follow();      // reopen the log if the file at its path was replaced
 void log_info (const std::string& m);
 void log_warn (const std::string& m);
 void log_err  (const std::string& m);

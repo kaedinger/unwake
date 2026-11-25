@@ -41,6 +41,11 @@ static void log_follow_locked() {
     _log = fopen(_log_file.c_str(), "a");
 }
 
+void log_follow() {
+    std::lock_guard<std::mutex> l(_log_mu);
+    log_follow_locked();
+}
+
 static void log_trim_locked() {
     struct stat st;
     if (_log_file.empty() || stat(_log_file.c_str(), &st) != 0) return;

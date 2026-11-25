@@ -293,6 +293,7 @@ static struct fuse_session* mount_new(struct fuse_args* args, MountInfo& mine) {
 static void reload_settings() {
     auto before = *std::atomic_load(&g_cfg.excluded_shares);
     std::vector<std::string> warn;
+    log_follow();
     bool ok = load_config(warn);
     for (auto& w : warn) (ok ? log_warn : log_err)(w);
     if (!ok) { log_err("Settings not reloaded - the ones in use stay"); return; }
@@ -483,6 +484,7 @@ static void forward(int sig) {
 static void supervisor_settings() {
     std::vector<std::string> warn;
     load_config(warn);
+    log_follow();
 }
 static void on_usr2(int) { _sig_upgrade = 1; }
 
