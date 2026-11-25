@@ -229,6 +229,25 @@ newest_wins() {
     return $bad
 }
 check "new names: owner and size right away (20 rounds)" newest_wins
+# a slow writer: the kernel looks the name up again every second and takes the size in the
+# reply as the truth; a size from the tree (0 from the create) cut the file (Claude installer)
+slow_writer() {
+    local dir="$1" f="$1/slow" bad=0 i s
+    head -c 4194304 /dev/urandom > "$T/slow-src"
+    exec 3>"$f"
+    for i in 1 2 3 4; do
+        dd if="$T/slow-src" bs=1M skip=$((i - 1)) count=1 status=none >&3
+        sleep 1.2
+        s=$(stat -c %s "$f"); [ "$s" = $((i * 1048576)) ] || { echo "    round $i: stat $s"; bad=1; }
+        s=$(ls -l "$dir" | awk '$NF == "slow" {print $5}'); [ "$s" = $((i * 1048576)) ] || { echo "    round $i: ls $s"; bad=1; }
+    done
+    exec 3>&-
+    cmp -s "$T/slow-src" "$f" || { echo "    read back right after close: $(stat -c %s "$f") bytes"; bad=1; }
+    rm -f "$f" "$T/slow-src"
+    return $bad
+}
+check "slow writer: size by path and read back right" slow_writer "$U/shows"
+check "slow writer on a pool-only share" slow_writer "$T/mnt/user/docs/notes"
 check "mkdir + rename dir" bash -c "mkdir -p '$U/newdir/inner' && echo z > '$U/newdir/inner/z' && mv '$U/newdir' '$U/moved-dir'"
 check "rename file over another" bash -c "echo a > '$U/shows/a' && echo b > '$U/shows/b' && mv '$U/shows/a' '$U/shows/b' && test \$(cat '$U/shows/b') = a"
 check "chmod" bash -c "chmod 600 '$U/shows/inband.txt' && test \$(stat -c %a '$U/shows/inband.txt') = 600"

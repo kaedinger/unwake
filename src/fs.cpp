@@ -415,11 +415,22 @@ static void note_via(const char* op, const std::string& rel, const Via& v, const
     if (v.b >= 0) g_stats.pool_direct++;
 }
 
+// A name open for writing: its attributes from the file itself, like getattr. The kernel takes
+// the size in a lookup or readdirplus reply as the truth (no writeback cache) and cuts the file
+// to it; the tree's size is older (from the create, or not known at all while the writes go
+// through a passthrough backing file), and the kernel asks again every second.
+static void writer_attrs(fuse_ino_t ino, struct stat& st) {
+    int fd = node_wfd(ino);
+    struct stat w;
+    if (fd >= 0 && fstat(fd, &w) == 0) { st = w; st.st_ino = ino; }
+}
+
 static void reply_entry(fuse_req_t req, fuse_ino_t parent, const std::string& name, const struct stat& st) {
     struct fuse_entry_param e = {};
     e.ino = node_ref(parent, name);
     e.attr = st;
     e.attr.st_ino = e.ino;
+    writer_attrs(e.ino, e.attr);
     e.attr_timeout = ATTR_TIMEOUT;
     e.entry_timeout = ENTRY_TIMEOUT;
     if (fuse_reply_entry(req, &e) != 0) node_forget(e.ino, 1);
@@ -860,6 +871,7 @@ static void op_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent, const 
     e.ino = ino;
     e.attr = st;
     e.attr.st_ino = ino;
+    writer_attrs(ino, e.attr);
     e.attr_timeout = ATTR_TIMEOUT;
     e.entry_timeout = 0;
     if (fuse_reply_entry(req, &e) != 0) node_forget(ino, 1);
@@ -1202,6 +1214,7 @@ static void do_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, s
                 }
                 e.ino = node_ref(ino, de.name);
                 de.attr.to(e.attr, e.ino);
+                writer_attrs(e.ino, e.attr);
                 e.attr_timeout = ATTR_TIMEOUT;
                 e.entry_timeout = ENTRY_TIMEOUT;
             }
