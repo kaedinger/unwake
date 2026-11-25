@@ -211,6 +211,24 @@ U="$T/mnt/user/media"
 check "create + write" bash -c "echo hello > '$U/shows/inband.txt'"
 check "read back" test "$(cat "$U/shows/inband.txt")" = hello
 check "owner is the caller" bash -c "setpriv --reuid=99 --regid=100 --clear-groups touch '$U/shows/by-nobody' && test \$(stat -c %u '$U/shows/by-nobody') = 99"
+# fanotify reads a new name maybe before unwake's chown or the writes after it; what unwake
+# shows right after (the kernel's caches dropped, so from the tree) must be the final state
+newest_wins() {
+    local i n="$U/shows/race" bad=0
+    head -c 4194304 /dev/urandom > "$T/race-src"
+    for i in $(seq 1 20); do
+        setpriv --reuid=99 --regid=100 --clear-groups bash -c "
+            mkdir -p '$n/$i/a/b' && mkdir '$n/$i/a/b/locks' && ln -s x '$n/$i/l' && cp '$T/race-src' '$n/$i/f'" || bad=1
+        echo 2 > /proc/sys/vm/drop_caches
+        [ "$(stat -c %u:%g "$n/$i/a/b")" = 99:100 ] || { echo "    $i: folder $(stat -c %u:%g "$n/$i/a/b")"; bad=1; }
+        [ "$(stat -c %u:%g "$n/$i/l")" = 99:100 ] || { echo "    $i: symlink $(stat -c %u:%g "$n/$i/l")"; bad=1; }
+        [ "$(stat -c %s "$n/$i/f")" = 4194304 ] || { echo "    $i: size $(stat -c %s "$n/$i/f")"; bad=1; }
+        cmp -s "$T/race-src" "$n/$i/f" || { echo "    $i: content differs"; bad=1; }
+    done
+    rm -rf "$n" "$T/race-src"
+    return $bad
+}
+check "new names: owner and size right away (20 rounds)" newest_wins
 check "mkdir + rename dir" bash -c "mkdir -p '$U/newdir/inner' && echo z > '$U/newdir/inner/z' && mv '$U/newdir' '$U/moved-dir'"
 check "rename file over another" bash -c "echo a > '$U/shows/a' && echo b > '$U/shows/b' && mv '$U/shows/a' '$U/shows/b' && test \$(cat '$U/shows/b') = a"
 check "chmod" bash -c "chmod 600 '$U/shows/inband.txt' && test \$(stat -c %a '$U/shows/inband.txt') = 600"

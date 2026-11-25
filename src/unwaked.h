@@ -141,6 +141,17 @@ inline bool attr_from_branch_wins(const Entry& e, int b) {
     return e.mask && b == __builtin_ctzll(e.mask);
 }
 
+// Is st an older look at the name than what e shows? Compared by ctime, which every change
+// moves forward: fanotify reads a new name when its event comes, maybe before our own
+// chown or the writes that followed, and must not overwrite what came after. Only for a
+// name on one disk (copies on several disks have ctimes of their own) of the same type.
+inline bool stat_older(const Entry& e, const struct stat& st) {
+    if (!e.has_attr || __builtin_popcountll(e.mask) > 1) return false;
+    if ((e.attr.mode & S_IFMT) != (st.st_mode & S_IFMT)) return false;
+    if (st.st_ctim.tv_sec != e.attr.ctime) return st.st_ctim.tv_sec < e.attr.ctime;
+    return (uint32_t)st.st_ctim.tv_nsec < e.attr.ctime_ns;
+}
+
 // Change counters. A reader that asks shfs or a disk and then writes what it learned
 // into the tree takes a PathSnap first and writes only if nothing changed meanwhile;
 // otherwise fanotify, which always re-checks the disk, has the last word. The counters

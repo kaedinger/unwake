@@ -463,11 +463,28 @@ static inline void test_pause(const char*) {}
 
 // Record a stat learned from shfs: s was taken before asking. If anything changed along
 // the path meanwhile, nothing is written: fanotify brings the truth.
+// The folder changed while we asked shfs: what we learned about a name still counts for its
+// attributes if the tree has the name and our stat isn't older than the one it shows. Our own
+// create, chown and writes come back as events too, read by fanotify maybe before we were done
+// (owner root, size 0), and its own re-read waits a second. Lock held (exclusive).
+static void attr_if_not_older(const std::string& rel, const struct stat& st) {
+    DirNode* d = tree_find(path_dir(rel));
+    if (!d) return;
+    auto it = d->entries.find(path_base(rel));
+    if (it == d->entries.end()) return;
+    Entry& e = it->second;
+    if (!e.has_attr || __builtin_popcountll(e.mask) > 1 || stat_older(e, st)) return;
+    if ((e.attr.mode & S_IFMT) != (st.st_mode & S_IFMT)) return;
+    e.attr.from(st);
+    e.attr_from = -1;
+    touch_attr(d);
+}
+
 static void cache_put(const std::string& rel, const struct stat& st, const PathSnap& s) {
     if (rel.empty() || !caching_for(rel)) return;
     auto dir = path_dir(rel);
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
-    if (!tree_snap_ok(dir, s, true)) return;
+    if (!tree_snap_ok(dir, s, true)) return attr_if_not_older(rel, st);
     DirNode* d = tree_find(dir);
     if (!d) d = tree_ensure(dir, 0);
     auto r = d->entries.try_emplace(path_base(rel));
@@ -487,7 +504,7 @@ static void cache_put(const std::string& rel, const struct stat& st, const PathS
 static void cache_update(const std::string& rel, const struct stat& st, const PathSnap& s) {
     if (rel.empty() || !caching_for(rel)) return;
     std::unique_lock<std::shared_mutex> l(g_tree.mu);
-    if (!tree_snap_ok(path_dir(rel), s, true)) return;
+    if (!tree_snap_ok(path_dir(rel), s, true)) return attr_if_not_older(rel, st);
     DirNode* d = tree_find(path_dir(rel));
     if (!d) return;
     auto it = d->entries.find(path_base(rel));
@@ -787,6 +804,7 @@ static void created(fuse_req_t req, fuse_ino_t parent, const std::string& rel, c
         fuse_reply_err(req, errno);
         return;
     }
+    if (r == 0) { st.st_uid = ctx->uid; st.st_gid = ctx->gid; }   // even if shfs still shows the old owner
     test_pause("create");
     cache_put(rel, st, snap);
     if (fd < 0) reply_entry(req, parent, name, st);
@@ -983,9 +1001,11 @@ static void op_create(fuse_req_t req, fuse_ino_t parent, const char* name, mode_
     int fd = openat(g_shfs_fd, rel.c_str(), (fi->flags & ~O_NOCTTY) | O_CREAT | O_CLOEXEC, mode);
     if (fd < 0) return fail(req, "create", rel, errno);
     auto ctx = fuse_req_ctx(req);
-    if (fchown(fd, ctx->uid, ctx->gid) != 0) log_warn("chown " + rel + ": " + strerror(errno));
+    bool owned = fchown(fd, ctx->uid, ctx->gid) == 0;
+    if (!owned) log_warn("chown " + rel + ": " + strerror(errno));
     struct stat st;
     if (fstat(fd, &st) != 0) { int e = errno; close(fd); return (void)fuse_reply_err(req, e); }
+    if (owned) { st.st_uid = ctx->uid; st.st_gid = ctx->gid; }
     test_pause("create");
     cache_put(rel, st, snap);
     struct fuse_entry_param e = {};

@@ -184,7 +184,7 @@ static void apply_added(int b, const std::string& rel_dir, const std::string& na
     if (r.second) g_tree.entries++;
     bool had_b = e.mask & bit(b);   // our own rename through shfs: contents unchanged
     e.mask |= bit(b);
-    if (attr_from_branch_wins(e, b)) {
+    if (attr_from_branch_wins(e, b) && !stat_older(e, st)) {
         e.attr.from(st);
         e.has_attr = true;
         e.attr_from = (int8_t)b;
@@ -288,6 +288,7 @@ static void flush_pending() {
         if (it == d->entries.end()) continue;
         Entry& e = it->second;
         if (!attr_from_branch_wins(e, p.b)) continue;   // another disk's copy is the one shown
+        if (stat_older(e, st)) continue;                 // our own change landed after this stat
         e.attr.from(st);
         e.has_attr = true;
         e.attr_from = (int8_t)p.b;
