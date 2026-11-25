@@ -573,6 +573,13 @@ r0=$(reads disk1 disk2)
 ls -lR "$T/mnt/user/media/shows" "$T/mnt/user/media/movies" >/dev/null
 r1=$(reads disk1 disk2)
 check "listings after the switch from RAM: 0 disk reads (got $((r1 - r0)))" test "$r1" -eq "$r0"
+# the log cut by the other process (rename over it, like the trim): both write into the new file
+cp "$T/unwake.log" "$T/unwake.log.cut" && mv "$T/unwake.log.cut" "$T/unwake.log"
+sleep 5.5
+kill -HUP "$SUP"
+for _ in $(seq 1 30); do grep -q 'Settings reloaded' <(tail -n 3 "$T/unwake.log") && break; sleep 0.2; done
+check "after the log was replaced, the worker writes into the new one" bash -c "tail -n 3 '$T/unwake.log' | grep -q 'Settings reloaded'"
+check "no process writes into a deleted log" bash -c "! ls -l /proc/$SUP/fd /proc/$(worker_pid)/fd 2>/dev/null | grep -q 'unwake.log (deleted)'"
 check "listing equals shfs" same_listing
 exec 6<&- 7>&-
 kill "$CWDP" 2>/dev/null; wait "$CWDP" 2>/dev/null

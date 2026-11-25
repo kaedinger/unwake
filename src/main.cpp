@@ -475,6 +475,14 @@ static void forward(int sig) {
     if (_child > 0) kill(_child, sig);
     if (_pending > 0 && sig != SIGHUP) kill(_pending, sig);   // it has no handler yet
     if (sig == SIGTERM || sig == SIGUSR1 || sig == SIGINT) _sig_stop = 1;
+    if (sig == SIGHUP) _sig_reload = 1;
+}
+// The supervisor's own settings: only what its log needs (the size limits). Without them it
+// trimmed at the 1 MB default, and the worker went on writing into the cut-off file. Its
+// warnings are the worker's to log.
+static void supervisor_settings() {
+    std::vector<std::string> warn;
+    load_config(warn);
 }
 static void on_usr2(int) { _sig_upgrade = 1; }
 
@@ -531,6 +539,7 @@ static int supervisor(pid_t adopt_child) {
     for (int s : {SIGTERM, SIGINT, SIGUSR1, SIGHUP}) sigaction(s, &sa, nullptr);
     sa.sa_handler = on_usr2;
     sigaction(SIGUSR2, &sa, nullptr);
+    supervisor_settings();
     if (adopt_child > 0) {      // re-exec after an upgrade: the worker runs already
         _child = adopt_child;
         _child_ctl = _ctl_fd;
@@ -560,6 +569,7 @@ static int supervisor(pid_t adopt_child) {
         pid_t got;
         for (;;) {
             if (_sig_upgrade) { _sig_upgrade = 0; start_upgrade(); }
+            if (_sig_reload) { _sig_reload = 0; supervisor_settings(); }
             got = waitpid(-1, &st, 0);
             if (got < 0 && errno == EINTR) continue;
             if (got > 0 && got == _pending) {

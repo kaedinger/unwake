@@ -21,13 +21,24 @@ std::atomic<bool> g_debug{false};
 static std::mutex  _log_mu;
 static std::string _log_file;
 static FILE*       _log = nullptr;
-static time_t      _log_checked = 0;
+static time_t      _log_checked = 0, _log_followed = 0;
 
 void log_open(const std::string& file) {
     std::lock_guard<std::mutex> l(_log_mu);
     if (_log) fclose(_log);
     _log_file = file;
     _log = fopen(file.c_str(), "a");
+}
+
+// The file at the path isn't ours any more (the other process - supervisor or worker - cut
+// it, or it was removed): write where it is read.
+static void log_follow_locked() {
+    struct stat st, cur;
+    if (!_log || _log_file.empty()) return;
+    if (stat(_log_file.c_str(), &st) == 0 && fstat(fileno(_log), &cur) == 0 &&
+        st.st_ino == cur.st_ino && st.st_dev == cur.st_dev) return;
+    fclose(_log);
+    _log = fopen(_log_file.c_str(), "a");
 }
 
 static void log_trim_locked() {
@@ -44,6 +55,10 @@ static void vlog(const char* level, const std::string& m) {
     time_t now = time(nullptr);
     std::string ts = fmt_time(now);
     std::lock_guard<std::mutex> l(_log_mu);
+    if (now - _log_followed >= 5) {
+        _log_followed = now;
+        log_follow_locked();
+    }
     FILE* f = _log ? _log : stderr;
     fprintf(f, "%s [%s] %s\n", ts.c_str(), level, m.c_str());
     fflush(f);
