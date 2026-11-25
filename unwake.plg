@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.23.41367-beta">
+  <!ENTITY version   "2026.11.25.48471-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,7 +20,7 @@
 >
 
 <CHANGES>
-### next
+### 2026.11.25.48471-beta
 - fix: a folder, link or file just made through unwake shows its new owner and full size right away: the newest look at a name wins, by its change time (the 35258-beta fix could keep an older one for a second: Permission denied in a folder just made, empty copies)
 - fix: a file being written shows its size so far also when looked up by name or listed, not an older one: the kernel cut slow writes short (empty copies)
 - log: after an in-place update the worker's lines reach unwake.log again: the supervisor trimmed at 1 MB (it didn't read the settings), and the worker kept writing into the cut-off file
