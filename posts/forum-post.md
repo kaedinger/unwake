@@ -110,4 +110,4 @@ plugin install https://raw.githubusercontent.com/kaedinger/unwake/channel/unwake
 
 Unwake came out of Unspin's disk wake-up tracking - once it showed who woke the disks, most of the wake-ups turned out to be folder listings and name lookups that Cache Directories couldn't keep in memory. Unwake was designed and written with Claude Code, and tested on my own server.
 
-<sub>Current stable version when this post was written: 2026.11.26.41335</sub>
+<sub>Current stable version when this post was written: 2026.11.26.53284</sub>
