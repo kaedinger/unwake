@@ -6,7 +6,7 @@
 
 require_once __DIR__ . '/cfg.php';
 
-const UNWAKE_CH_CACHE  = '/tmp/unwake-channel';
+const UNWAKE_CH_CACHE  = '/var/run/unwake/channel';   // root's own, no symlink question
 const UNWAKE_CH_TTL    = 3600;
 const PLUGINS_TMP      = '/tmp/plugins';   // Unraid's: its update check's copy, release notes for its popup
 

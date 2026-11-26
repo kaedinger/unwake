@@ -20,6 +20,13 @@
 >
 
 <CHANGES>
+### next
+- security: a downloaded .plg is read without loading external entities (XXE)
+- security: the version shown on the channel switch is escaped as HTML
+- security: rc.unwake reads SERVICE from unwake.cfg as text instead of running the file
+- security: the channel cache moved from /tmp to /var/run/unwake; rc.unwake diag makes a new file of its own (mktemp)
+- release: stable releases ship unwaked stripped (debug info as the release asset unwaked-VERSION.debug); every release carries a build provenance attestation (README: Checking a release)
+
 ### 2026.11.25.50172
 - feat: quick link to Unspin when it's installed, else a hint to install it (COMPANION_LABEL, COMPANION_HINT in unwake.cfg)
 - fix: a request that asked shfs no longer writes what it saw over a newer change from fanotify: no ghost names or folders, no missing names, no older sizes or times
@@ -149,7 +156,7 @@ echo "Unwake plugin installed successfully."
 # files that are still open and exits when they close, or when the array stops.
 /etc/rc.d/rc.unwake stop 2>/dev/null
 removepkg &name;
-rm -rf /tmp/unwake-channel /tmp/plugins/unwake-stable.txt /tmp/plugins/unwake-beta.txt
+rm -rf /var/run/unwake/channel /tmp/unwake-channel /tmp/plugins/unwake-stable.txt /tmp/plugins/unwake-beta.txt
 echo "Unwake plugin removed. Config preserved at /boot/config/plugins/unwake/"
 </INLINE>
 </FILE>

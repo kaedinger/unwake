@@ -158,7 +158,8 @@ static void write_status(const std::string& state, time_t started) {
 
 // ---------------------------------------------------------------------------
 // Crash report: signal, load address and a raw backtrace into the log, so it
-// can be resolved against the released binary (addr2line -e unwaked ADDR-BASE).
+// can be resolved against the released binary (addr2line -e unwaked ADDR-BASE;
+// a stable release: -e unwaked-VERSION.debug, its release asset).
 // Only async-signal-safe calls in the handler; backtrace() is primed beforehand.
 // ---------------------------------------------------------------------------
 static char _crash_log[512];

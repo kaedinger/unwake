@@ -12,6 +12,8 @@ env:
 
 permissions:
   contents: write
+  id-token: write       # build provenance: signed by GitHub for this workflow run
+  attestations: write
 
 jobs:
   test:
@@ -40,8 +42,29 @@ jobs:
           case "$VER" in *-beta|*-dev) HOOKS=1 ;; *) HOOKS=0 ;; esac
           make build-daemon VERSION=$VER TEST_HOOKS=$HOOKS
 
+      # stable ships stripped; its debug info is a release asset of its own, for crash
+      # backtraces (addr2line -e unwaked-VER.debug). Betas keep it in the binary.
+      - name: Strip the stable binary
+        if: ${{ !endsWith(github.ref_name, '-beta') && !endsWith(github.ref_name, '-dev') }}
+        run: |
+          set -euo pipefail
+          B=usr/local/sbin/unwaked
+          objcopy --only-keep-debug $B unwaked-$VER.debug
+          strip --strip-all $B
+          objcopy --add-gnu-debuglink=unwaked-$VER.debug $B
+          ls -l $B unwaked-$VER.debug
+
       - name: Build TXZ package
         run: make package VERSION=$VER
+
+      # anyone can check that a release was built here, from the tagged commit:
+      # gh attestation verify unwake-VER-x86_64-1.txz --repo kaedinger/unwake
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            pkg/unwake-${{ github.ref_name }}-x86_64-1.txz
+            usr/local/sbin/unwaked
 
       - name: Update .plg version
         run: make update-plg VERSION=$VER
@@ -60,9 +83,10 @@ jobs:
             *-beta|*-dev) FLAGS="--prerelease --latest=false" ;;
             *)            FLAGS="--latest" ;;
           esac
+          DEBUG=(); [ -f "unwaked-$VER.debug" ] && DEBUG=("unwaked-$VER.debug")
           gh release create "$VER" $FLAGS --generate-notes \
             "pkg/unwake-$VER-x86_64-1.txz" \
-            "unwake.plg"
+            "unwake.plg" "${DEBUG[@]}"
 
       - name: Update the beta channel
         if: ${{ endsWith(github.ref_name, '-beta') }}

@@ -130,7 +130,13 @@ function vfs_pressure() {
 // version, pluginURL and CHANGES of a .plg file, or null
 function plg_info($file) {
     if (!is_file($file)) return null;
-    $xml = @simplexml_load_file($file, 'SimpleXMLElement', LIBXML_NOENT);
+    // internal entities (&version;, &pluginURL;) are expanded; external ones are never
+    // loaded: a downloaded .plg can't pull a local file or a URL into what is shown
+    $text = @file_get_contents($file);
+    if ($text === false) return null;
+    libxml_set_external_entity_loader(fn() => null);
+    $xml = @simplexml_load_string($text, 'SimpleXMLElement', LIBXML_NOENT | LIBXML_NONET);
+    libxml_set_external_entity_loader(null);
     if (!$xml || !isset($xml['version'])) return null;
     return [
         'version' => (string)$xml['version'],

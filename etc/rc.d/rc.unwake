@@ -37,8 +37,17 @@ tidy() {
     alive "$(sup_pid)" || rm -f "$PID_FILE"
 }
 
-# SERVICE="enabled": the saved settings over the defaults, as unwaked reads them
-enabled() { ( source "$DEFAULTS" 2>/dev/null; source "$CFG" 2>/dev/null; [ "$SERVICE" = enabled ] ); }
+# KEY="value" from a settings file, read as text (never run), the last one wins
+cfg_get() {
+    awk -v k="$1" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2); gsub(/^[ \t"]+|[ \t"\r]+$/, "", v); r = v } END { print r }' "$2" 2>/dev/null
+}
+
+# SERVICE="enabled": the saved setting if valid, else the default, as unwaked reads them
+enabled() {
+    local v; v=$(cfg_get SERVICE "$CFG")
+    case "$v" in enabled|disabled) ;; *) v=$(cfg_get SERVICE "$DEFAULTS") ;; esac
+    [ "$v" = enabled ]
+}
 
 unwake_start() {
     [ "$1" = "--if-enabled" ] && ! enabled && return 0
@@ -247,7 +256,8 @@ unwake_users() {
 
 # Everything needed to look into a problem, in one file (no file contents, no secrets).
 unwake_diag() {
-    local out=/tmp/unwake-diag-$(date +%Y%m%d-%H%M%S).txt
+    # a new file of its own (mktemp), never one someone else placed there
+    local out; out=$(mktemp /tmp/unwake-diag-$(date +%Y%m%d-%H%M%S)-XXXX.txt) || return 1
     {
         echo "== Unwake diagnostics $(date '+%F %T')"
         echo "-- versions"

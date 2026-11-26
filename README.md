@@ -210,6 +210,16 @@ Activity log, an in-place update, stable and beta channel:
 
 `make build-daemon package` (needs meson and ninja for libfuse, which is patched and linked statically). Releases are built by CI from tags `YYYY.MM.DD.SECS` (stable, on `main`) and `YYYY.MM.DD.SECS-beta` (on `beta`), as in Unspin. CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XFS disks, with mergerfs standing in for shfs.
 
+### Checking a release
+
+Every release's package and `unwaked` carry a build provenance attestation, signed by GitHub: it says which workflow run built them, from which commit. To check a downloaded package (needs the GitHub CLI):
+
+```bash
+gh attestation verify unwake-VERSION-x86_64-1.txz --repo kaedinger/unwake
+```
+
+The commit it names is the source to read. Stable releases ship `unwaked` stripped and without test hooks (`TEST_HOOKS=0`); their debug info is the release asset `unwaked-VERSION.debug`, for resolving a crash backtrace from the log. Betas keep the debug info and the test hooks in the binary.
+
 ---
 
 ## License

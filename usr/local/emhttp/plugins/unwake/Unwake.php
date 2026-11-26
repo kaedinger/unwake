@@ -362,7 +362,7 @@ if ($us_installed || $us_hint):
     var info = (dat && dat[ch])
       ? " <i class='fa fa-info-circle fa-fw blue-text' title='Release Notes' onclick=\"event.stopPropagation();openChanges('showchanges " + dat[ch].notes + "','Release Notes')\"></i>"
       : '';
-    return name + " <span class='uw-ch-v" + (newer(ch) ? " red-text" : "") + "'>v" + v + "</span>" + info;
+    return name + " <span class='uw-ch-v" + (newer(ch) ? " red-text" : "") + "'>v" + $('<i>').text(v).html() + "</span>" + info;
   }
   function target() { return sw.is(':checked') ? 'beta' : 'stable'; }
   function render() {
