@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "unwake">
   <!ENTITY author     "kaedinger">
-  <!ENTITY version   "2026.11.25.50172">
+  <!ENTITY version   "2026.11.26.39978-beta">
   <!ENTITY launch     "Utilities/Unwake">
   <!ENTITY releaseURL "https://github.com/kaedinger/unwake/releases/latest/download">
   <!ENTITY pluginURL  "&releaseURL;/unwake.plg">
@@ -20,7 +20,7 @@
 >
 
 <CHANGES>
-### next
+### 2026.11.26.39978-beta
 - security: a downloaded .plg is read without loading external entities (XXE)
 - security: the version shown on the channel switch is escaped as HTML
 - security: rc.unwake reads SERVICE from unwake.cfg as text instead of running the file
