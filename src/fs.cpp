@@ -935,7 +935,7 @@ static int direct_branch(const std::string& rel) {
 }
 
 static void opened(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi, int fd, bool create,
-                   const struct fuse_entry_param* e) {
+                   const struct fuse_entry_param* e, bool own_reads = false) {
     auto h = new Handle;
     h->fd = fd;
     h->ino = ino;
@@ -957,7 +957,10 @@ static void opened(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi, in
                                        ") - its data goes through unwaked");
         }
     }
-    if (!h->backing_id && (fi->flags & O_DIRECT)) fi->direct_io = 1;
+    // direct_io overrides passthrough for reads and writes: they come to unwaked. Such an
+    // open keeps its backing all the same - while a file has one, the kernel refuses (EIO)
+    // every open of it without.
+    if (own_reads || (!h->backing_id && (fi->flags & O_DIRECT))) fi->direct_io = 1;
     fi->fh = fh_add(_handles, h);
     if (h->write) node_wfd_add(ino, fd, true);
     int r = create ? fuse_reply_create(req, e, fi) : fuse_reply_open(req, fi);
@@ -968,6 +971,18 @@ static void opened(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi, in
         close(fd);
         delete h;
     }
+}
+
+// File servers that send file data with sendfile/splice: smbd (comm "smbd[<client>"),
+// nfsd. A splice through kernel passthrough reads the backing file without a read event
+// on it, so a tool watching the disks (Unspin) wouldn't see these reads. For their
+// read-only opens, unwaked reads the file itself (direct_io), and those reads show.
+static bool splice_server(pid_t tid) {
+    static const char* const names[] = {"smbd", "nfsd"};
+    std::string comm = proc_line("/proc/" + std::to_string(tid) + "/comm");
+    for (auto n : names)
+        if (comm.compare(0, strlen(n), n) == 0) return true;
+    return false;
 }
 
 static void op_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi) {
@@ -1001,7 +1016,8 @@ static void op_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi) {
         }
         g_stats.open_shfs++;
     } else note_shfs("open (direct)", rel, {}, {}, bit(b));
-    opened(req, ino, fi, fd, false, nullptr);
+    bool own = (flags & O_ACCMODE) == O_RDONLY && splice_server(fuse_req_ctx(req)->pid);
+    opened(req, ino, fi, fd, false, nullptr, own);
 }
 
 static void op_create(fuse_req_t req, fuse_ino_t parent, const char* name, mode_t mode, struct fuse_file_info* fi) {

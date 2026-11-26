@@ -50,6 +50,7 @@ The kernel takes **one backing file per file**, shared by everything that has th
 
 - While a file is open through `/mnt/user`, Unwake holds it open for writing. That changes nothing on the disk, but a program that tries to *execute* that same file via `/mnt/diskN` or `/mnt/cache` at that moment gets "text file busy".
 - Tools that count file opens on the disks (Unspin) see one extra open when a file is first opened.
+- Files that **smbd (SMB) or nfsd** open for reading are the exception: Unwake reads them for the server itself. Those servers send file data with `sendfile`, and a sendfile through passthrough reads the disk without telling tools that watch the disks - Unspin wouldn't count the reads of a movie played over SMB. The cost is what shfs cost before Unwake: the data passes through a daemon.
 - Where a read-write open isn't possible (read-only file system, a file being executed), the backing is read-only; a program opening that file for writing while it's open elsewhere gets "device or resource busy".
 
 ### Updates without restarting anything

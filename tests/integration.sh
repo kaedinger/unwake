@@ -155,6 +155,46 @@ check "a writer opens it while a reader holds it (read-write backing)" bash -c "
 check "and the reader reads what was written" bash -c "grep -q third <&8"
 exec 8<&-
 
+say "files smbd reads: unwaked reads them, so their reads show on the disk (sendfile)"
+# A sendfile through passthrough reads the disk file without a read event on it (Unspin
+# wouldn't count it). The helper runs as "smbd" (comm comes from the symlink's name),
+# sendfiles the /mnt/user file to a copy and counts IN_ACCESS on the disk file; with a
+# third argument it runs that command while holding its own open of the file.
+cat > "$T/sendfile.py" <<'PY'
+import ctypes, os, struct, subprocess, sys
+src, disk, out = sys.argv[1], sys.argv[2], sys.argv[3]
+libc = ctypes.CDLL(None, use_errno=True)
+ino = libc.inotify_init1(os.O_NONBLOCK)
+libc.inotify_add_watch(ino, disk.encode(), 0x1)   # IN_ACCESS
+fd = os.open(src, os.O_RDONLY)
+if len(sys.argv) > 4 and subprocess.run(sys.argv[4:]).returncode: sys.exit(3)
+o = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+off, size = 0, os.fstat(fd).st_size
+while off < size:
+    n = os.sendfile(o, fd, off, size - off)
+    if n <= 0: break
+    off += n
+n = 0
+try:
+    while True:
+        b = os.read(ino, 65536)
+        n += len(b) // 16   # no names: watched file itself
+except BlockingIOError: pass
+print(n)
+PY
+ln -sf "$(command -v python3)" "$T/smbd"
+D="$T/mnt/disk2/media/movies/big.bin"; S="$T/mnt/user/media/movies/big.bin"
+n=$("$T/smbd" -I "$T/sendfile.py" "$S" "$D" "$T/sent.bin")
+check "smbd's sendfile reads the file intact" cmp -s "$D" "$T/sent.bin"
+check "and the disk file reports the reads ($n events)" test "${n:-0}" -gt 0
+n=$(python3 -I "$T/sendfile.py" "$S" "$D" "$T/sent.bin")
+echo "  (another program's sendfile: $n events - 0 where the kernel does passthrough)"
+exec 8< "$S"
+check "smbd opens a file another reader holds (passthrough) and reads it" bash -c "'$T/smbd' -I '$T/sendfile.py' '$S' '$D' '$T/sent.bin' >/dev/null && cmp -s '$D' '$T/sent.bin'"
+exec 8<&-
+check "another reader opens a file smbd holds" "$T/smbd" -I "$T/sendfile.py" "$S" "$D" "$T/sent.bin" cmp -s "$D" "$S"
+rm -f "$T/sent.bin"
+
 say "detection"
 check "caching stays on with a tmpfs mount below a disk" test "$(stat_json "d['caching']")" = 1
 check "that mount is passed through" grep -q 'Not cached: media/tmpmnt' "$T/unwake.log"

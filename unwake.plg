@@ -20,6 +20,9 @@
 >
 
 <CHANGES>
+### next
+- fix: files played over SMB or NFS are read by Unwake itself, so Unspin counts their reads again and moves often-played files to the cache
+
 ### 2026.11.26.41335
 - security: a downloaded .plg is read without loading external entities (XXE)
 - security: the version shown on the channel switch is escaped as HTML
