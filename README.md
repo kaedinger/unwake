@@ -1,6 +1,6 @@
 # Unwake - Directory Caching for Unraid User Shares
 
-Keeps every folder of your user shares in RAM, so browsing them doesn't wake sleeping disks. Not for a while after the last browse, not until a backup pushes the kernel's caches out - for good, kept current as files change. The main goal is fewer disk spin-ups; faster folder listings come for free.
+Keeps every folder of the user shares in RAM, so browsing them doesn't wake sleeping disks. Not for a while after the last browse, not until a backup pushes the kernel's caches out - for good, kept current as files change. The main goal is fewer disk spin-ups; faster folder listings come for free.
 
 Unwake's brother is [Unspin](https://github.com/kaedinger/unspin), which has the same goal for file data: it moves the most-used files to faster storage, so reading them doesn't wake disks either. Unwake keeps browsing from waking disks, Unspin keeps reading from doing so; they work well together.
 
@@ -38,9 +38,13 @@ Unwake runs `unwaked`, a FUSE daemon that sits **on top of** `/mnt/user` - shfs 
 
 **Filling the tree.** Unwake reads a disk's folders only while that disk spins anyway, at idle I/O priority, and never wakes a disk to do so. A disk that sleeps when Unwake starts is read the next time something else spins it up. Until then, its folders are passed to shfs, as without Unwake.
 
-**Keeping it current.** Unwake watches every disk and pool with **fanotify**, one mark per file system. Every change - through Unwake, straight on `/mnt/diskN`, by the Mover, Unbalanced, a container or Unspin - updates the tree right away. Nothing is re-read on a timer; once a disk has been read, it isn't read for its folders again.
+**Keeping it current.** Unwake watches every disk and pool with **fanotify**, one mark per file system. Every change - through Unwake, straight on `/mnt/diskN`, by the Mover, Unbalanced, a container or Unspin - updates the tree right away. Unwake doesn't re-read folders to find changes; only the verifier (below) checks the tree against the disks, slowly and only while a disk spins anyway.
 
-**What stays out of RAM.** Shares that live on an SSD pool only can't wake a disk, so they aren't kept in RAM; Unwake sends their requests straight to that pool, not through shfs, which would look every path up on every disk. If an array disk still holds folders of such a share, it's kept in RAM like the others. You can untick any share to pass it to shfs.
+**What stays out of RAM.** Shares that live on an SSD pool only can't wake a disk, so they aren't kept in RAM; Unwake sends their requests straight to that pool, not through shfs, which would look every path up on every disk. If an array disk still holds folders of such a share, it's kept in RAM like the others. Any share can be unticked to pass it to shfs.
+
+### Verifier
+
+A safety net for the tree: should it ever differ from a disk (a missed event, a bug), the verifier finds and repairs it. By default once a day per disk, it compares the folders in RAM with that disk, at most 50 folders per second, and only while the disk spins and something else uses it, so it never wakes a disk or keeps one awake. It starts on a disk once that disk's folders were read the first time, so it needs `HARVEST=yes`. A difference counts only if a second look a little later shows the same; it's repaired in RAM and written to `/var/log/unwake-verify.log`. Betas always verify and show its progress on the settings page; stable releases verify without showing it. Rate, interval and switch: `VERIFY_*` below.
 
 ### File data and kernel passthrough
 
@@ -74,7 +78,7 @@ Measured on the author's server (1.4 million names): 376 MB before the nightly b
 
 - **Folders in RAM, for good** - listings, lookups (including of names that don't exist), attributes and extended attributes answered without touching shfs; nothing pushes them out of memory
 - **Never wakes a disk to read it** - folders are read while a disk spins anyway, at idle I/O priority
-- **Event-driven** - fanotify on every disk and pool keeps the tree current, whoever changes a file; no polling, no re-scans
+- **Event-driven** - fanotify on every disk and pool keeps the tree current, whoever changes a file; no polling. A slow daily verifier, only while disks spin anyway, catches anything missed
 - **All Unraid file systems** - XFS, btrfs, ZFS (datasets are followed as they come and go), on array disks and pools
 - **Stacked, not replacing** - shfs stays mounted underneath; stopping Unwake takes it off at once, and what still uses it keeps working until it lets go
 - **Kernel passthrough for file data** - no copy through the daemon; files on one known disk are read from that disk directly
@@ -103,24 +107,19 @@ plugin install https://github.com/kaedinger/unwake/releases/latest/download/unwa
 
 Settings under *Settings → Utilities → Unwake*.
 
+Unwake replaces Dynamix Cache Directories: turn that off under *Settings → Folder Caching*. If it left `vfs_cache_pressure` at a low value, the settings page offers to set it back to 100.
+
 ### Stable and beta channel
 
-New features come out as betas first. The switch at the bottom right of the settings page shows the newest version on each channel and moves you between them:
+New features come out as betas first. The switch at the bottom right of the settings page shows the newest version on each channel and switches between them; from then on, the Plugins page offers updates from that channel. Every stable fix reaches the beta channel too. Settings stay across a switch; going back to stable drops those that only exist in the beta.
 
-- **Switch:** move the slider to the other channel and click **Switch**. A note tells you what changes, then the version from that channel is installed. From then on, the Plugins page offers you updates from that channel only.
-- **Update:** when your own channel has a newer version, it's shown in red and the button turns into **Update**.
-- **Every stable release reaches the beta channel too**, either under the same number or inside the next beta. Beta users never miss a fix. When the beta is the stable release itself, its changelog says *Beta channel: identical to stable release ...*.
-- **Settings stay** when you switch. Going back to stable drops settings that only exist in the beta the next time you save; they come back with their defaults if you switch to beta again.
-- **Community Applications:** on the beta channel, CA doesn't list Unwake under *Installed Apps*, because CA only recognizes the stable version. Unwake keeps working and updating as usual; manage it on the Plugins page.
-- **Fix Common Problems** warns on the beta channel that Unwake is *not known to Community Applications*. Same reason: CA only knows the stable version. Nothing is wrong; you can ignore that warning.
+On the beta channel, Community Applications doesn't list Unwake under *Installed Apps*, and Fix Common Problems warns that it's *not known to Community Applications*: CA only knows the stable version. Both are harmless; manage Unwake on the Plugins page.
 
 To install the beta directly:
 
 ```bash
 plugin install https://raw.githubusercontent.com/kaedinger/unwake/channel/unwake.plg
 ```
-
-Unwake replaces Dynamix Cache Directories - turn that off under *Settings → Folder Caching*. If it left `vfs_cache_pressure` at a low value, the settings page offers to set it back to 100.
 
 ---
 
@@ -133,17 +132,17 @@ Unwake replaces Dynamix Cache Directories - turn that off under *Settings → Fo
 | `DATA_PATH` | `direct` | `direct`: a file on exactly one known disk is opened on that disk; `shfs`: all files through shfs |
 | `RETURN_RAM` | `yes` | Once the kernel has let go of many names (a backup's, hours later), hand the freed RAM back to the system. `no`: keep it for the next backup (see *RAM after a backup*) |
 | `EXCLUDED_SHARES` | *(empty)* | Shares passed to shfs, never kept in RAM. Managed by *Shares in RAM* on the settings page |
-| `INCLUDED_SHARES` | *(empty)* | SSD-pool-only shares kept in RAM anyway |
+| `INCLUDED_SHARES` *(hidden)* | *(empty)* | SSD-pool-only shares kept in RAM anyway |
 | `LOG_LEVEL` | `info` | `info` or `debug` |
 | `LOG_MAX_SIZE_MB` | `16` | The log is cut once it grows past this |
 | `LOG_TRIM_SIZE_MB` | `2` | How much of the newest log is kept when it's cut |
-| `VERIFY` | `yes` | The verifier compares the folders in RAM with the disks and repairs what differs. `no` turns it off; a beta always verifies |
-| `VERIFY_RATE` | `50` | Folders per second and disk the verifier checks (at least `1`) |
-| `VERIFY_INTERVAL` | `86400` | Seconds from the end of a disk's pass to its next one (`0`: right away) |
-| `COMPANION_LABEL` | `yes` | Not on the settings page. Show the name next to Unspin's icon in the pill at the top right of the settings page (`yes`), or the icon only (`no`) |
-| `COMPANION_HINT` | `yes` | Not on the settings page. While Unspin isn't installed, the pill says that Unwake works best with Unspin and links to it (`yes`); `no` hides the pill instead |
+| `VERIFY` *(hidden)* | `yes` | Run the verifier (see *Verifier*). `no` turns it off; a beta always verifies |
+| `VERIFY_RATE` *(hidden)* | `50` | Folders per second and disk the verifier checks (at least `1`) |
+| `VERIFY_INTERVAL` *(hidden)* | `86400` | Seconds from the end of a disk's pass to its next one (`0`: right away) |
+| `COMPANION_LABEL` *(hidden)* | `yes` | Show the name next to Unspin's icon in the pill at the top right of the settings page (`yes`), or the icon only (`no`) |
+| `COMPANION_HINT` *(hidden)* | `yes` | While Unspin isn't installed, the pill says that Unwake works best with Unspin and links to it (`yes`); `no` hides the pill instead |
 
-The three `VERIFY` keys are not on the settings page (on the beta channel it shows the verifier's progress; on the stable channel, Unwake verifies without showing it); set them in `/boot/config/plugins/unwake/unwake.cfg`, then run `/etc/rc.d/rc.unwake reload`. The verifier needs `HARVEST=yes` and checks a disk only after its folders were read once, and only while it spins anyway and something else is using it, so it never keeps a disk awake. Every difference it finds goes to `/var/log/unwake-verify.log`.
+*Hidden* settings aren't on the settings page. Set them in `/boot/config/plugins/unwake/unwake.cfg` (for example `VERIFY_RATE="20"`), then run `/etc/rc.d/rc.unwake reload`. Saving the settings page keeps them.
 
 ---
 
@@ -209,7 +208,7 @@ Activity log, an in-place update, stable and beta channel:
 
 ## Building
 
-`make build-daemon package` (needs meson and ninja for libfuse, which is patched and linked statically). Releases are built by CI from tags `YYYY.MM.DD.SECS` (stable, on `main`) and `YYYY.MM.DD.SECS-beta` (on `beta`), as in Unspin. CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XFS disks, with mergerfs standing in for shfs.
+`make build-daemon package` (needs meson and ninja for libfuse, which is patched and linked statically). Releases are built by CI from tags `YYYY.MM.DD.SECS` (stable, on `main`) and `YYYY.MM.DD.SECS-beta` (on `beta`). CI runs `tests/integration.sh` on every push: real FUSE mounts on loop-device XFS disks, with mergerfs standing in for shfs.
 
 ### Checking a release
 

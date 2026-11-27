@@ -18,11 +18,11 @@ Unwake runs `unwaked`, a FUSE daemon that sits **on top of** `/mnt/user` - shfs 
 
 **Filling the tree.** Unwake reads a disk's folders only while that disk spins anyway, at idle I/O priority, and never wakes a disk to do so. A disk that sleeps when Unwake starts is read the next time something else spins it up.
 
-**Keeping it current.** Unwake watches every disk and pool with **fanotify**. Every change - through Unwake, straight on `/mnt/diskN`, by the Mover, Unbalanced, a container or Unspin - updates the tree right away. Nothing is re-read on a timer.
+**Keeping it current.** Unwake watches every disk and pool with **fanotify**. Every change - through Unwake, straight on `/mnt/diskN`, by the Mover, Unbalanced, a container or Unspin - updates the tree right away. Unwake doesn't re-read folders to find changes; only the verifier (below) checks them against the disks.
 
 **What stays out of RAM.** Shares that live on an SSD pool only can't wake a disk, so they aren't kept in RAM; Unwake sends their requests straight to that pool, not through shfs, which would look every path up on every disk. If an array disk still holds folders of such a share, it's kept in RAM like the others. You can untick any share to pass it to shfs.
 
-**Checked against the disks.** A verifier compares the folders in RAM with the disks, slowly and only while a disk spins anyway and something else uses it, so it never keeps a disk awake. Whatever differs is repaired and written to `/var/log/unwake-verify.log`. `VERIFY="no"` in `unwake.cfg` turns it off.
+**Checked against the disks.** A verifier compares the folders in RAM with the disks, slowly and only while a disk spins anyway and something else uses it, so it never keeps a disk awake. Whatever differs is repaired and written to `/var/log/unwake-verify.log`. `VERIFY="no"` in `unwake.cfg`, then `rc.unwake reload`, turns it off.
 
 #### Safe by design
 
@@ -45,7 +45,7 @@ One thing worth knowing: the kernel takes **one backing file per file**, shared 
 
 - **Folders in RAM, for good** - nothing pushes them out of memory
 - **Never wakes a disk to read it** - folders are read while a disk spins anyway
-- **Event-driven** - no polling, no re-scans
+- **Event-driven** - no polling
 - **All Unraid file systems** - XFS, btrfs, ZFS (datasets are followed as they come and go), on array disks and pools
 - **In-place updates** - same mount, same open files; containers and VMs don't notice
 - **Shares in RAM** - every share listed with a tick box; SSD-pool-only shares are detected and go straight to their pool
