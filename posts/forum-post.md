@@ -1,7 +1,5 @@
 ## Unwake - Directory Caching for Unraid User Shares
 
-**Not out yet:** Unwake is still being tested and can't be installed yet. This post will be updated once it's available.
-
 Unwake keeps every folder of your user shares in RAM, so browsing them doesn't wake sleeping disks. Not for a while after the last browse, not until a backup pushes the kernel's caches out - for good, kept current as files change. The main goal is fewer disk spin-ups; faster folder listings come for free.
 
 It replaces Dynamix Cache Directories, and it's the brother of [Unspin](https://github.com/kaedinger/unspin), which has the same goal for file data: Unspin keeps reading files from waking your disks, Unwake keeps browsing from doing so.
@@ -77,7 +75,7 @@ Activity log, an in-place update, stable and beta channel:
 
 ### Installation
 
-**Via Community Applications (recommended):** search for **Unwake** and click Install.
+**Via Community Applications (recommended):** search for **Unwake** and click Install. (soon, still under CA review)
 
 **Manual:**
 
