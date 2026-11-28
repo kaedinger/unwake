@@ -46,10 +46,59 @@ static constexpr size_t XATTR_BUF = 65536;   // the most a name list or value ca
 // named only with debug logging: "qemu-img 1234, parent php-fpm 99"
 static thread_local pid_t t_caller = 0;
 
+// Requests in progress, one slot per request thread: the watchdog (inflight_start) lists
+// those waiting 1 s or more, so Unspin can name who spun up a disk. A program waiting for
+// a FUSE answer sleeps in state S, not D: only we know who asked. Uncontended locks on
+// the hot path; the watchdog takes each one for a moment every 500 ms.
+struct Slot {
+    std::mutex mu;
+    bool busy = false;         // a request is being handled
+    bool disk = false;         // it went to shfs or a disk (note_shfs), or works on an open file
+    pid_t tid = 0;
+    int64_t start = 0;         // epoch ms
+    const char* op = nullptr;  // FUSE op, as Unspin names it
+    const char* note_op = nullptr;   // note_shfs's op ("readdir", "open (write)", ...)
+    fuse_ino_t ino = 0;
+    std::string rel, to;       // from note_shfs; empty: the path of ino
+    Mask mask = 0;
+};
+static constexpr size_t SLOTS = 256;     // the request loop runs at most 64 threads
+static Slot _slots[SLOTS];
+static std::atomic<bool> _slot_used[SLOTS];
+struct SlotRef { Slot* s = nullptr; ~SlotRef() { if (s) _slot_used[s - _slots] = false; } };
+static thread_local SlotRef t_slot;
+static Slot* my_slot() {
+    if (t_slot.s) return t_slot.s;
+    for (size_t i = 0; i < SLOTS; i++) {
+        bool f = false;
+        if (_slot_used[i].compare_exchange_strong(f, true)) return t_slot.s = &_slots[i];
+    }
+    return nullptr;
+}
+
+[[maybe_unused]] static fuse_ino_t first_ino() { return 0; }
+template <typename T, typename... R> static fuse_ino_t first_ino(T t, R...) {
+    if constexpr (std::is_same_v<T, fuse_ino_t>) return t;
+    else return 0;
+}
+
 template <auto F> struct Caller;
 template <typename... A, void (*F)(fuse_req_t, A...)>
 struct Caller<F> {
-    static void call(fuse_req_t req, A... a) { t_caller = fuse_req_ctx(req)->pid; F(req, a...); }
+    static inline const char* op = nullptr;    // set in fs_ops(); nullptr: not tracked (forget)
+    static inline bool on_file = false;        // works on an open file: always reaches a disk
+    static void call(fuse_req_t req, A... a) {
+        t_caller = fuse_req_ctx(req)->pid;
+        Slot* s = op ? my_slot() : nullptr;
+        if (s) {
+            std::lock_guard<std::mutex> l(s->mu);
+            s->busy = true; s->disk = on_file; s->tid = t_caller; s->start = now_ms();
+            s->op = op; s->note_op = nullptr; s->ino = first_ino(a...);
+            s->rel.clear(); s->to.clear(); s->mask = 0;
+        }
+        F(req, a...);
+        if (s) { std::lock_guard<std::mutex> l(s->mu); s->busy = false; }
+    }
 };
 
 static std::string proc_line(const std::string& path) {
@@ -96,6 +145,10 @@ void note_shfs(const char* op, const std::string& rel, const std::string& to, co
     if (g_debug)
         log_debug("to " + (mask ? g_branches[__builtin_ctzll(mask)]->name : std::string("shfs")) + ": " + std::string(op) + " " + (rel.empty() ? "/" : rel) + (to.empty() ? "" : " -> " + to) +
                   (note.empty() ? "" : " " + note) + (who.empty() ? "" : " [" + who + "]"));
+    if (Slot* s = t_slot.s) {
+        std::lock_guard<std::mutex> l(s->mu);
+        if (s->busy) { s->disk = true; s->note_op = op; s->rel = rel; s->to = to; s->mask = mask; }
+    }
     std::lock_guard<std::mutex> l(_req_mu);
     ShfsReq r{now_ms(), op, rel, to, note, mask, std::move(who)};
     if (_reqs.size() < REQ_RING) _reqs.push_back(std::move(r));
@@ -138,6 +191,15 @@ static std::string req_line(const ShfsReq& r, const char* time_fmt) {
            (r.who.empty() ? "" : " [" + r.who + "]");
 }
 
+// The disks a request passed to shfs may read: shfs looks the path up on every disk with
+// its folder (a folder listing: on every disk with the folder itself)
+static Mask shfs_disks(const char* op, const std::string& rel, const std::string& to) {
+    bool own = !strcmp(op, "readdir") || rel.find('/') == std::string::npos;
+    Mask m = disks_of_dir(own ? rel : path_dir(rel));
+    if (!to.empty()) m |= disks_of_dir(path_dir(to));
+    return m;
+}
+
 std::string shfs_window() {
     return "in the " + fmt_secs(REQ_WINDOW / 1000) + " before (writes: " + fmt_secs(REQ_WINDOW_WRITE / 1000) + ")";
 }
@@ -159,11 +221,7 @@ std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& hold
             if (r.mask & want) hit.push_back({&r, true});
             continue;
         }
-        // shfs looks the path up on every disk: any of them may have to read for it
-        bool own = !strcmp(r.op, "readdir") || r.rel.find('/') == std::string::npos;
-        Mask m = disks_of_dir(own ? r.rel : path_dir(r.rel));
-        if (!r.to.empty()) m |= disks_of_dir(path_dir(r.to));
-        bool on = m & want;
+        bool on = shfs_disks(r.op, r.rel, r.to) & want;
         if (on) holding++;
         hit.push_back({&r, on});
     }
@@ -1417,6 +1475,7 @@ static void op_setxattr(fuse_req_t req, fuse_ino_t ino, const char* name, const 
     if (!path_of(ino, rel)) return (void)fuse_reply_err(req, ENOENT);
     auto v = via(rel);
     if (!rel.empty()) note_via("setxattr", rel, v, name);
+    test_pause("setxattr");     // tests: a request waiting for a disk, in the inflight list
     auto p = via_path(v, rel);
     int r = rel.empty() ? setxattr(p.c_str(), name, value, size, flags) : lsetxattr(p.c_str(), name, value, size, flags);
     cache_xattrs_unknown(rel);
@@ -1434,43 +1493,146 @@ static void op_removexattr(fuse_req_t req, fuse_ino_t ino, const char* name) {
     fuse_reply_err(req, r == 0 ? 0 : errno);
 }
 
+// ---------------------------------------------------------------------------
+// The requests waiting for a disk, for Unspin: <inflight_path()>, rewritten when the set
+// waiting 1 s or more changes, gone when there is none. Format (Unspin reads it):
+//   unwake-inflight 1 <pid>
+//   <caller tid>\t<start, epoch ms>\t<op>\t<disk root or empty>\t<path below /mnt/user>
+// disk: set when the request goes to one disk only (straight there, a file on one disk,
+// or shfs looking it up in a folder only one disk has).
+// ---------------------------------------------------------------------------
+static constexpr int64_t INFLIGHT_MIN_MS = 1000;
+static constexpr size_t INFLIGHT_MAX = 64;
+static std::mutex _if_mu;
+static std::condition_variable _if_cv;
+static std::thread _if_thr;
+static bool _if_stop = false;
+
+static std::string inflight_path() {
+    return g_cfg.branch_args.empty() ? std::string("/var/run/unwaked.inflight") : g_cfg.run_dir + "/unwaked.inflight";
+}
+
+// ours: the file names this process (a newer unwaked may own it after a hand-over)
+static void inflight_remove() {
+    auto p = inflight_path();
+    std::ifstream f(p);
+    std::string tag, ver;
+    long pid = 0;
+    if (f >> tag >> ver >> pid && pid == (long)getpid()) unlink(p.c_str());
+}
+
+static std::string inflight_list() {
+    struct W { pid_t tid; int64_t start; const char* op; const char* note_op; fuse_ino_t ino; std::string rel, to; Mask mask; };
+    std::vector<W> v;
+    auto now = now_ms();
+    for (size_t i = 0; i < SLOTS; i++) {
+        if (!_slot_used[i]) continue;
+        Slot& s = _slots[i];
+        std::lock_guard<std::mutex> l(s.mu);
+        if (s.busy && s.disk && now - s.start >= INFLIGHT_MIN_MS)
+            v.push_back({s.tid, s.start, s.op, s.note_op, s.ino, s.rel, s.to, s.mask});
+    }
+    if (v.empty()) return {};
+    std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.start < b.start; });
+    if (v.size() > INFLIGHT_MAX) v.resize(INFLIGHT_MAX);
+    std::string out;
+    for (auto& w : v) {
+        Mask m = w.mask;
+        if (w.note_op) {
+            if (!m) m = shfs_disks(w.note_op, w.rel, w.to);
+        } else if (w.ino == FUSE_ROOT_ID || path_of(w.ino, w.rel)) {
+            m = disks_of_dir(w.rel);             // an open file: the disk it is on
+        }
+        std::string disk;
+        if (__builtin_popcountll(m) == 1) {
+            size_t b = (size_t)__builtin_ctzll(m);
+            if (b < g_branches.size()) disk = g_branches[b]->root;
+        }
+        std::string path = "/" + w.rel;
+        for (auto& c : path) if (c == '\n' || c == '\r') c = ' ';
+        out += std::to_string(w.tid) + "\t" + std::to_string(w.start) + "\t" + w.op + "\t" + disk + "\t" + path + "\n";
+    }
+    return out;
+}
+
+void inflight_start() {
+    std::lock_guard<std::mutex> l(_if_mu);
+    if (_if_thr.joinable()) return;
+    _if_stop = false;
+    _if_thr = std::thread([] {
+        std::string last;
+        std::unique_lock<std::mutex> l(_if_mu);
+        while (!_if_stop) {
+            _if_cv.wait_for(l, std::chrono::milliseconds(500));
+            if (_if_stop) break;
+            l.unlock();
+            auto body = inflight_list();
+            if (body != last) {
+                if (body.empty()) inflight_remove();
+                else {   // whole or not at all for a reader
+                    auto p = inflight_path(), tmp = p + ".tmp." + std::to_string(getpid());
+                    { std::ofstream o(tmp, std::ios::trunc); o << "unwake-inflight 1 " << getpid() << "\n" << body; }
+                    if (rename(tmp.c_str(), p.c_str()) != 0) unlink(tmp.c_str());
+                }
+                last = body;
+            }
+            l.lock();
+        }
+        l.unlock();
+        if (!last.empty()) inflight_remove();
+    });
+}
+
+void inflight_stop() {
+    {
+        std::lock_guard<std::mutex> l(_if_mu);
+        if (!_if_thr.joinable()) return;
+        _if_stop = true;
+    }
+    _if_cv.notify_all();
+    _if_thr.join();
+}
+
 const struct fuse_lowlevel_ops* fs_ops() {
     static struct fuse_lowlevel_ops ops = [] {
         struct fuse_lowlevel_ops o = {};
+        // op: the name in the list of waiting requests (Unspin's names); file: works on an open file
+#define OP(f, name, file) (Caller<op_##f>::op = name, Caller<op_##f>::on_file = file, o.f = Caller<op_##f>::call)
         o.init = op_init;
-        o.lookup = Caller<op_lookup>::call;
+        OP(lookup, "lookup", false);
         o.forget = Caller<op_forget>::call;
         o.forget_multi = Caller<op_forget_multi>::call;
-        o.getattr = Caller<op_getattr>::call;
-        o.setattr = Caller<op_setattr>::call;
-        o.readlink = Caller<op_readlink>::call;
-        o.mknod = Caller<op_mknod>::call;
-        o.mkdir = Caller<op_mkdir>::call;
-        o.symlink = Caller<op_symlink>::call;
-        o.link = Caller<op_link>::call;
-        o.unlink = Caller<op_unlink>::call;
-        o.rmdir = Caller<op_rmdir>::call;
-        o.rename = Caller<op_rename>::call;
-        o.open = Caller<op_open>::call;
-        o.create = Caller<op_create>::call;
-        o.read = Caller<op_read>::call;
-        o.write_buf = Caller<op_write_buf>::call;
-        o.flush = Caller<op_flush>::call;
-        o.release = Caller<op_release>::call;
-        o.fsync = Caller<op_fsync>::call;
-        o.fallocate = Caller<op_fallocate>::call;
-        o.lseek = Caller<op_lseek>::call;
-        o.copy_file_range = Caller<op_copy_file_range>::call;
-        o.opendir = Caller<op_opendir>::call;
-        o.readdir = Caller<op_readdir>::call;
-        o.readdirplus = Caller<op_readdirplus>::call;
-        o.releasedir = Caller<op_releasedir>::call;
-        o.fsyncdir = Caller<op_fsyncdir>::call;
-        o.statfs = Caller<op_statfs>::call;
-        o.getxattr = Caller<op_getxattr>::call;
-        o.listxattr = Caller<op_listxattr>::call;
-        o.setxattr = Caller<op_setxattr>::call;
-        o.removexattr = Caller<op_removexattr>::call;
+        OP(getattr, "getattr", false);
+        OP(setattr, "setattr", false);
+        OP(readlink, "readlink", false);
+        OP(mknod, "mknod", false);
+        OP(mkdir, "mkdir", false);
+        OP(symlink, "symlink", false);
+        OP(link, "link", false);
+        OP(unlink, "unlink", false);
+        OP(rmdir, "rmdir", false);
+        OP(rename, "rename", false);
+        OP(open, "open", false);
+        OP(create, "create", false);
+        OP(read, "read", true);
+        OP(write_buf, "write", true);
+        OP(flush, "flush", true);
+        OP(release, "release", false);
+        OP(fsync, "fsync", true);
+        OP(fallocate, "fallocate", true);
+        OP(lseek, "lseek", true);
+        OP(copy_file_range, "copy_file_range", true);
+        OP(opendir, "opendir", false);
+        OP(readdir, "readdir", false);
+        OP(readdirplus, "readdir", false);
+        OP(releasedir, "releasedir", false);
+        OP(fsyncdir, "fsync", false);
+        OP(statfs, "statfs", false);
+        OP(getxattr, "getxattr", false);
+        OP(listxattr, "listxattr", false);
+        OP(setxattr, "setxattr", false);
+        OP(removexattr, "removexattr", false);
+#undef OP
         return o;
     }();
     nodes_init();

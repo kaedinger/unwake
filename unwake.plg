@@ -20,6 +20,9 @@
 >
 
 <CHANGES>
+### next
+- feat: lists requests waiting for a disk, so Unspin can name who spun it up
+
 ### 2026.11.26.53284
 - fix: files played over SMB or NFS are read by Unwake itself, so Unspin counts their reads again and moves often-played files to the cache
 

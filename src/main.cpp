@@ -339,6 +339,7 @@ static int worker() {
     write_status("running", started);
     write_file(g_cfg.run_dir + "/ready", std::to_string(getpid()) + "\n");
     if (g_caching) harvester_start();
+    inflight_start();
 
     // housekeeping: spin state, status file, signals, array stop, upgrade requests
     static constexpr int TICK_MS = 250;
@@ -361,7 +362,7 @@ static int worker() {
                     m.id = mine.id; m.major = mine.major; m.minor = mine.minor; m.started = started;
                     bool done = handover_send(ho, se, m);
                     close(ho);
-                    if (done) { _handed_over = true; return; }
+                    if (done) { _handed_over = true; inflight_stop(); return; }
                 }
             }
             if (_sig_reload) { _sig_reload = 0; reload_settings(); }
@@ -403,6 +404,7 @@ static int worker() {
                 }
                 detached_at = now_ms();
                 state = "draining";
+                inflight_stop();        // a new unwaked may run already: the file is its
                 g_caching = false;
                 harvester_stop();
                 events_stop();
@@ -440,6 +442,7 @@ static int worker() {
     int r = loop_run(se, 64, 8);
     loop_done = true;
     house.join();
+    inflight_stop();
     if (_handed_over) {
         // the new unwaked has the connection, the change events and the status files
         harvester_stop();

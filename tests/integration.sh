@@ -195,6 +195,26 @@ exec 8<&-
 check "another reader opens a file smbd holds" "$T/smbd" -I "$T/sendfile.py" "$S" "$D" "$T/sent.bin" cmp -s "$D" "$S"
 rm -f "$T/sent.bin"
 
+say "requests waiting for a disk: listed for Unspin (who sent them)"
+# test-slow-setxattr holds a setxattr 2.5 s after it was passed on, like a disk spinning up
+I="$T/run/unwaked.inflight"
+echo x > "$T/mnt/disk2/media/movies/disk2-only/flag"; chown 99:100 "$T/mnt/disk2/media/movies/disk2-only/flag"; sleep 1.5
+check "no list while nothing waits" test ! -e "$I"
+echo 2500 > "$T/run/test-slow-setxattr"
+"$T/smbd" -I -c 'import os, sys; os.setxattr(sys.argv[1], "user.DOSATTRIB", b"x")' "$T/mnt/user/media/movies/disk2-only/flag" &
+P=$!
+for _ in $(seq 1 30); do [ -s "$I" ] && break; sleep 0.1; done
+L=$(cat "$I" 2>/dev/null)
+W=$(printf '%s\n' "$L" | awk -F'\t' '$3 == "setxattr" {print $1}' | head -1)
+G=$(awk '/^Tgid:/ {print $2}' /proc/"${W:-0}"/status 2>/dev/null)    # while smbd still waits
+rm -f "$T/run/test-slow-setxattr"; wait $P
+printf '%s\n' "$L" | sed 's/^/    /'
+check "the header names this unwaked" test "$(printf '%s\n' "$L" | head -1)" = "unwake-inflight 1 $(worker_pid)"
+check "the waiting setxattr comes from smbd's thread" test "$G" = "$P"
+check "with its disk and path" bash -c "printf '%s\n' \"\$1\" | awk -F'\t' -v d='$T/mnt/disk2' '\$3 == \"setxattr\" && \$4 == d && \$5 == \"/media/movies/disk2-only/flag\" && \$2 ~ /^[0-9]{13}\$/' | grep -q ." _ "$L"
+sleep 1
+check "gone once answered" test ! -e "$I"
+
 say "detection"
 check "caching stays on with a tmpfs mount below a disk" test "$(stat_json "d['caching']")" = 1
 check "that mount is passed through" grep -q 'Not cached: media/tmpmnt' "$T/unwake.log"

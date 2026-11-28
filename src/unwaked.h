@@ -21,9 +21,11 @@
 #include <cstdint>
 #include <ctime>
 #include <memory>
+#include <condition_variable>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -307,4 +309,8 @@ void note_shfs(const char* op, const std::string& rel, const std::string& to = {
 std::vector<std::string> shfs_for(int b, size_t max, size_t& total, size_t& holding);
 // the last requests passed to shfs for names in dir (of the last 512 requests, any age)
 std::vector<std::string> shfs_recent(const std::string& dir, size_t max);
+// the requests waiting 1 s or more for a disk, in /var/run/unwaked.inflight for Unspin
+// (who sent them, what, which disk); stop removes the file if it is ours
+void inflight_start();
+void inflight_stop();
 std::string shfs_window();   // the time shfs_for covers, for a log line: "in the 30s before (writes: 2m)"
