@@ -473,6 +473,33 @@ static void note_via(const char* op, const std::string& rel, const Via& v, const
     if (v.b >= 0) g_stats.pool_direct++;
 }
 
+// Extended attributes of a name only one disk holds (its folder known on every disk): set
+// and read on that disk. shfs would look the path up on every disk with the folder first,
+// and wake those whose entries the kernel has dropped - Samba sets user.DOSATTRIB on
+// folders. shfs keeps nothing of its own in user.* or the ACLs (it computes system.* ones
+// on request: those still go to it). Not for the share root, or with DATA_PATH=shfs.
+static int sole_branch(const std::string& rel) {
+    if (!g_cfg.direct_reads || rel.find('/') == std::string::npos || !caching_for(rel) || !g_tree.per_branch) return -1;
+    std::shared_lock<std::shared_mutex> l(g_tree.mu);
+    DirNode* d = tree_find(path_dir(rel));
+    if (!d || !tree_all_known(d)) return -1;
+    auto it = d->entries.find(path_base(rel));
+    if (it == d->entries.end() || __builtin_popcountll(it->second.mask) != 1) return -1;
+    int b = __builtin_ctzll(it->second.mask);
+    return (size_t)b < g_branches.size() ? b : -1;
+}
+static Via xattr_via(const std::string& rel, bool& sole) {
+    int b = sole_branch(rel);
+    int fd = b >= 0 ? branch_fd(b) : -1;
+    sole = fd >= 0;
+    return sole ? Via{fd, b} : via(rel);
+}
+static void note_xattr(const char* op, const std::string& rel, const Via& v, bool sole, const std::string& note = {}) {
+    if (!sole) return note_via(op, rel, v, note);
+    note_shfs(op, rel, {}, note, bit(v.b));
+    g_stats.xattr_direct++;
+}
+
 // A name open for writing: its attributes from the file itself, like getattr. The kernel takes
 // the size in a lookup or readdirplus reply as the truth (no writeback cache) and cuts the file
 // to it; the tree's size is older (from the create, or not known at all while the writes go
@@ -1349,8 +1376,9 @@ static int xattrs_of(const std::string& rel, Xattrs& out) {
         }
     }
     g_stats.xattr_miss++;
-    auto v = via(rel);
-    note_via("xattr", rel, v);
+    bool sole;
+    auto v = xattr_via(rel, sole);
+    note_xattr("xattr", rel, v, sole);
     auto snap = tree_snap(path_dir(rel));
     int err = 0;
     auto xs = read_xattrs(via_path(v, rel), &err);
@@ -1473,8 +1501,9 @@ static void op_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size) {
 static void op_setxattr(fuse_req_t req, fuse_ino_t ino, const char* name, const char* value, size_t size, int flags) {
     std::string rel;
     if (!path_of(ino, rel)) return (void)fuse_reply_err(req, ENOENT);
-    auto v = via(rel);
-    if (!rel.empty()) note_via("setxattr", rel, v, name);
+    bool sole;
+    auto v = xattr_via(rel, sole);
+    if (!rel.empty()) note_xattr("setxattr", rel, v, sole, name);
     test_pause("setxattr");     // tests: a request waiting for a disk, in the inflight list
     auto p = via_path(v, rel);
     int r = rel.empty() ? setxattr(p.c_str(), name, value, size, flags) : lsetxattr(p.c_str(), name, value, size, flags);
@@ -1485,8 +1514,9 @@ static void op_setxattr(fuse_req_t req, fuse_ino_t ino, const char* name, const 
 static void op_removexattr(fuse_req_t req, fuse_ino_t ino, const char* name) {
     std::string rel;
     if (!path_of(ino, rel)) return (void)fuse_reply_err(req, ENOENT);
-    auto v = via(rel);
-    if (!rel.empty()) note_via("removexattr", rel, v, name);
+    bool sole;
+    auto v = xattr_via(rel, sole);
+    if (!rel.empty()) note_xattr("removexattr", rel, v, sole, name);
     auto p = via_path(v, rel);
     int r = rel.empty() ? removexattr(p.c_str(), name) : lremovexattr(p.c_str(), name);
     cache_xattrs_unknown(rel);
@@ -1497,9 +1527,11 @@ static void op_removexattr(fuse_req_t req, fuse_ino_t ino, const char* name) {
 // The requests waiting for a disk, for Unspin: <inflight_path()>, rewritten when the set
 // waiting 1 s or more changes, gone when there is none. Format (Unspin reads it):
 //   unwake-inflight 1 <pid>
-//   <caller tid>\t<start, epoch ms>\t<op>\t<disk root or empty>\t<path below /mnt/user>
-// disk: set when the request goes to one disk only (straight there, a file on one disk,
-// or shfs looking it up in a folder only one disk has).
+//   <caller tid>\t<start, epoch ms>\t<op>\t<route>\t<disk root or empty>\t<path below /mnt/user>
+// route: "direct" - it can wake only the one disk it's on: sent straight there, or working
+// on an open file; "shfs" - passed to shfs, which looks the path up on every disk with its
+// folder and may wake any of them.
+// disk: the one disk the request is for, if known (for shfs: the only disk holding the folder).
 // ---------------------------------------------------------------------------
 static constexpr int64_t INFLIGHT_MIN_MS = 1000;
 static constexpr size_t INFLIGHT_MAX = 64;
@@ -1548,9 +1580,10 @@ static std::string inflight_list() {
             size_t b = (size_t)__builtin_ctzll(m);
             if (b < g_branches.size()) disk = g_branches[b]->root;
         }
+        const char* route = w.mask || !w.note_op ? "direct" : "shfs";
         std::string path = "/" + w.rel;
         for (auto& c : path) if (c == '\n' || c == '\r') c = ' ';
-        out += std::to_string(w.tid) + "\t" + std::to_string(w.start) + "\t" + w.op + "\t" + disk + "\t" + path + "\n";
+        out += std::to_string(w.tid) + "\t" + std::to_string(w.start) + "\t" + w.op + "\t" + route + "\t" + disk + "\t" + path + "\n";
     }
     return out;
 }

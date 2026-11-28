@@ -140,6 +140,7 @@ static void write_status(const std::string& state, time_t started) {
     n("readdir_hit", g_stats.readdir_hit); n("readdir_miss", g_stats.readdir_miss);
     n("xattr_hit", g_stats.xattr_hit); n("xattr_miss", g_stats.xattr_miss);
     n("open_direct", g_stats.open_direct); n("open_shfs", g_stats.open_shfs); n("pool_direct", g_stats.pool_direct);
+    n("xattr_direct", g_stats.xattr_direct);
     o << jstr("pool_only") << ":" << pool_only_json() << ",";
     o << jstr("branches") << ":[";
     for (size_t i = 0; i < g_branches.size(); i++) {

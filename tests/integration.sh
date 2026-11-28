@@ -211,9 +211,23 @@ rm -f "$T/run/test-slow-setxattr"; wait $P
 printf '%s\n' "$L" | sed 's/^/    /'
 check "the header names this unwaked" test "$(printf '%s\n' "$L" | head -1)" = "unwake-inflight 1 $(worker_pid)"
 check "the waiting setxattr comes from smbd's thread" test "$G" = "$P"
-check "with its disk and path" bash -c "printf '%s\n' \"\$1\" | awk -F'\t' -v d='$T/mnt/disk2' '\$3 == \"setxattr\" && \$4 == d && \$5 == \"/media/movies/disk2-only/flag\" && \$2 ~ /^[0-9]{13}\$/' | grep -q ." _ "$L"
+check "sent straight to its disk, with the disk and path" bash -c "printf '%s\n' \"\$1\" | awk -F'\t' -v d='$T/mnt/disk2' '\$3 == \"setxattr\" && \$4 == \"direct\" && \$5 == d && \$6 == \"/media/movies/disk2-only/flag\" && \$2 ~ /^[0-9]{13}\$/' | grep -q ." _ "$L"
+check "the attribute is set on that disk" test "$(getfattr --absolute-names --only-values -n user.DOSATTRIB "$T/mnt/disk2/media/movies/disk2-only/flag")" = x
 sleep 1
 check "gone once answered" test ! -e "$I"
+# a share's own folder is on several disks: passed to shfs, no one disk
+echo 2500 > "$T/run/test-slow-setxattr"
+"$T/smbd" -I -c 'import os, sys; os.setxattr(sys.argv[1], "user.unwaketest", b"x")' "$T/mnt/user/media" &
+P=$!
+for _ in $(seq 1 30); do [ -s "$I" ] && break; sleep 0.1; done
+L=$(cat "$I" 2>/dev/null)
+rm -f "$T/run/test-slow-setxattr"; wait $P
+setfattr -x user.unwaketest "$T/mnt/user/media" 2>/dev/null
+printf '%s\n' "$L" | sed 's/^/    /'
+check "a request passed to shfs is listed as such, with no disk" bash -c "printf '%s\n' \"\$1\" | awk -F'\t' '\$3 == \"setxattr\" && \$4 == \"shfs\" && \$5 == \"\" && \$6 == \"/media\"' | grep -q ." _ "$L"
+sleep 1
+check "gone again" test ! -e "$I"
+check "counted as an xattr request sent to its disk" test "$(stat_json "d['xattr_direct'] > 0")" = True
 
 say "detection"
 check "caching stays on with a tmpfs mount below a disk" test "$(stat_json "d['caching']")" = 1

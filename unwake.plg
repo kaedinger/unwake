@@ -22,6 +22,7 @@
 <CHANGES>
 ### next
 - feat: lists requests waiting for a disk, so Unspin can name who spun it up
+- feat: Samba's attributes on a folder or file that only one disk holds are set and read on that disk, so shfs no longer wakes the other disks looking it up
 
 ### 2026.11.26.53284
 - fix: files played over SMB or NFS are read by Unwake itself, so Unspin counts their reads again and moves often-played files to the cache

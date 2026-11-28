@@ -282,6 +282,7 @@ struct Stats {
     std::atomic<uint64_t> readdir_hit{0}, readdir_miss{0};
     std::atomic<uint64_t> xattr_hit{0}, xattr_miss{0};
     std::atomic<uint64_t> open_direct{0}, open_shfs{0};
+    std::atomic<uint64_t> xattr_direct{0};     // xattr requests for a name on one disk, sent to that disk
     std::atomic<uint64_t> pool_direct{0};      // requests in pool-only shares answered by their pool, not shfs
 };
 extern Stats g_stats;

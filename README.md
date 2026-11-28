@@ -131,7 +131,7 @@ Unwake replaces Dynamix Cache Directories - turn that off under *Settings → Fo
 |---|---|---|
 | `SERVICE` | `disabled` | `enabled` puts Unwake on top of `/mnt/user` when the array starts |
 | `HARVEST` | `yes` | Read the folders of disks while they spin anyway. `no`: only folders listed through Unwake are kept |
-| `DATA_PATH` | `direct` | `direct`: a file on exactly one known disk is opened on that disk; `shfs`: all files through shfs |
+| `DATA_PATH` | `direct` | `direct`: a file on exactly one known disk is opened on that disk, and extended attributes of a name only one disk holds are set and read there; `shfs`: all through shfs |
 | `RETURN_RAM` | `yes` | Once the kernel has let go of many names (a backup's, hours later), hand the freed RAM back to the system. `no`: keep it for the next backup (see *RAM after a backup*) |
 | `EXCLUDED_SHARES` | *(empty)* | Shares passed to shfs, never kept in RAM. Managed by *Shares in RAM* on the settings page |
 | `INCLUDED_SHARES` | *(empty)* | SSD-pool-only shares kept in RAM anyway |
